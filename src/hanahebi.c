@@ -28,6 +28,7 @@
 #include "nulib.h"
 #include "nulib/little_endian.h"
 #include "ai5/arc.h"
+#include "ai5/cg.h"
 #include "ai5/game.h"
 #include "ai5/mes.h"
 
@@ -60,6 +61,19 @@
 _Static_assert(SYSVAR16_OFF == 0x20b8);
 _Static_assert(SYSVAR32_OFF == 0x2154);
 _Static_assert(MEM16_SIZE <= MEMORY_MEM16_MAX_SIZE);
+
+static uint32_t param_or(struct param_list *params, unsigned i, uint32_t def)
+{
+	if (i >= params->nr_params || params->params[i].type != MES_PARAM_EXPRESSION)
+		return def;
+	return params->params[i].val;
+}
+
+// results of system calls are returned in var32[18] (mem16 + 0x2134)
+static void set_result(uint32_t v)
+{
+	mem_set_var32(18, v);
+}
 
 // log each unknown system call once per distinct (function, first param)
 static void log_unimplemented(const char *what, unsigned no, struct param_list *params)
@@ -102,9 +116,192 @@ SYS_STUB(10)
 SYS_STUB(14) SYS_STUB(16) SYS_STUB(20)
 SYS_STUB(23) SYS_STUB(24) SYS_STUB(26) SYS_STUB(28)
 
+/*
+ * Character sprites (Util 50, HH2D.exe 0x429xxx/0x42axxx).
+ * Three slots: 0 = center, 1 = left (-160px), 2 = right (+160px).
+ * Sprites are 32-bit CGs with alpha, drawn over the background in surface 1.
+ */
+#define NR_CHAR_SLOTS 3
+#define WORK_SURFACE  13
+#define FADE_SURFACE  14
+// each slot has a body sprite and an optional expression (face) sprite
+static struct cg *char_cg[NR_CHAR_SLOTS];
+static struct cg *char_face[NR_CHAR_SLOTS];
+
+static void char_unload_face(unsigned slot)
+{
+	if (slot < NR_CHAR_SLOTS && char_face[slot]) {
+		cg_free(char_face[slot]);
+		char_face[slot] = NULL;
+	}
+}
+
+static void char_unload(unsigned slot)
+{
+	if (slot < NR_CHAR_SLOTS && char_cg[slot]) {
+		cg_free(char_cg[slot]);
+		char_cg[slot] = NULL;
+	}
+	char_unload_face(slot);
+}
+
+static struct cg *char_load_cg(const char *name, unsigned slot)
+{
+	if (slot >= NR_CHAR_SLOTS) {
+		WARNING("Invalid character slot: %u", slot);
+		return NULL;
+	}
+	struct cg *cg = asset_cg_load(name);
+	if (!cg) {
+		WARNING("Failed to load character CG \"%s\"", name);
+		return NULL;
+	}
+	if (slot == 1)
+		cg->metrics.x -= 160;
+	else if (slot == 2)
+		cg->metrics.x += 160;
+	return cg;
+}
+
+static void char_load(const char *name, unsigned slot)
+{
+	struct cg *cg = char_load_cg(name, slot);
+	if (!cg)
+		return;
+	char_unload(slot);
+	char_cg[slot] = cg;
+	mem_set_sysvar16(mes_sysvar16_cg_x, cg->metrics.x);
+	mem_set_sysvar16(mes_sysvar16_cg_y, cg->metrics.y);
+	mem_set_sysvar16(mes_sysvar16_cg_w, cg->metrics.w);
+	mem_set_sysvar16(mes_sysvar16_cg_h, cg->metrics.h);
+}
+
+// crossfade the screen to the contents of `src`
+static void crossfade_to(unsigned src)
+{
+	unsigned step = mem_get_var16(5);
+	if (!step || step >= 64) {
+		gfx_copy(0, 0, 640, 480, src, 0, 0, 0);
+		return;
+	}
+	gfx_copy(0, 0, 640, 480, 0, 0, 0, FADE_SURFACE);
+	vm_timer_t timer = vm_timer_create();
+	for (unsigned a = step; a < 256; a += step) {
+		if (input_down(INPUT_CTRL))
+			break;
+		gfx_copy(0, 0, 640, 480, FADE_SURFACE, 0, 0, 0);
+		gfx_blend(0, 0, 640, 480, src, 0, 0, 0, a);
+		vm_peek();
+		vm_timer_tick(&timer, 16);
+	}
+	gfx_copy(0, 0, 640, 480, src, 0, 0, 0);
+}
+
+// redraw background (surface 1) + all characters, then show it
+static void char_present(bool fade)
+{
+	gfx_copy(0, 0, 640, 480, 1, 0, 0, WORK_SURFACE);
+	for (unsigned i = 0; i < NR_CHAR_SLOTS; i++) {
+		if (char_cg[i])
+			gfx_draw_cg(WORK_SURFACE, char_cg[i]);
+		if (char_face[i])
+			gfx_draw_cg(WORK_SURFACE, char_face[i]);
+	}
+	if (fade)
+		crossfade_to(WORK_SURFACE);
+	else
+		gfx_copy(0, 0, 640, 480, WORK_SURFACE, 0, 0, 0);
+}
+
+static void util_characters(struct param_list *params)
+{
+	unsigned op = param_or(params, 1, 0);
+	switch (op) {
+	case 0: // remove all
+		for (unsigned i = 0; i < NR_CHAR_SLOTS; i++)
+			char_unload(i);
+		break;
+	case 1: // load (1, name, slot)
+		char_load(vm_string_param(params, 2), param_or(params, 3, 0));
+		break;
+	case 2: // remove (2, slot)
+		char_unload(param_or(params, 2, 0));
+		break;
+	case 3: // remove (3, slot, fade) and redraw
+		char_unload(param_or(params, 2, 0));
+		char_present(param_or(params, 3, 0) == 1);
+		break;
+	case 4: // redraw (4, _, fade)
+		char_present(param_or(params, 3, 0) == 1);
+		break;
+	case 5:
+	case 6: // redraw with fade
+		char_present(true);
+		break;
+	case 8:
+	case 9: // show (8, slot, fade)
+		char_present(param_or(params, 3, 0) == 1);
+		break;
+	case 10:
+	case 11: // redraw
+		char_present(false);
+		break;
+	case 18: { // change expression (18, _, name, slot)
+		unsigned slot = param_or(params, 4, 0);
+		struct cg *face = char_load_cg(vm_string_param(params, 3), slot);
+		if (face) {
+			char_unload_face(slot);
+			char_face[slot] = face;
+			char_present(false);
+		}
+		break;
+	}
+	case 12: case 14: case 22: // TODO: lip sync / face animation
+		break;
+	default:
+		log_unimplemented("Util", 50, params);
+	}
+}
+
+/*
+ * Util 51: draw a character sprite directly onto the background (surface 1).
+ *   (0, name, slot), (1, name, slot), (3/4) clear
+ * The drawn rectangle is returned in var16[23..26].
+ */
+static void util_characters_direct(struct param_list *params)
+{
+	switch (param_or(params, 1, 0)) {
+	case 0:
+	case 1: {
+		struct cg *cg = char_load_cg(vm_string_param(params, 2), param_or(params, 3, 0));
+		if (!cg)
+			break;
+		gfx_draw_cg(1, cg);
+		mem_set_var16(23, cg->metrics.x);
+		mem_set_var16(24, cg->metrics.y);
+		mem_set_var16(25, cg->metrics.x + cg->metrics.w);
+		mem_set_var16(26, cg->metrics.y + cg->metrics.h);
+		cg_free(cg);
+		break;
+	}
+	case 2:
+	case 3:
+	case 4:
+		break;
+	default:
+		log_unimplemented("Util", 51, params);
+	}
+}
+
 static void hanahebi_util(struct param_list *params)
 {
 	switch (vm_expr_param(params, 0)) {
+	case 50:
+		util_characters(params);
+		break;
+	case 51:
+		util_characters_direct(params);
+		break;
 	case 23: { // transition speed from AI5WIN.INI [DispEffect] Play -> var16[5]
 		const char *v = config_ini_get("DispEffect", "Play");
 		static const uint16_t speed[] = { 8, 16, 32, 64 };
@@ -127,19 +324,6 @@ static void hanahebi_stmt_util(void)
 	if (unlikely(params.nr_params < 1))
 		VM_ERROR("Util without parameters");
 	hanahebi_util(&params);
-}
-
-static uint32_t param_or(struct param_list *params, unsigned i, uint32_t def)
-{
-	if (i >= params->nr_params || params->params[i].type != MES_PARAM_EXPRESSION)
-		return def;
-	return params->params[i].val;
-}
-
-// results of system calls are returned in var32[18] (mem16 + 0x2134)
-static void set_result(uint32_t v)
-{
-	mem_set_var32(18, v);
 }
 
 /*
@@ -589,6 +773,9 @@ static void hanahebi_init(void)
 struct game game_hanahebi = {
 	.id = GAME_HANAHEBI,
 	.surface_sizes = {
+		{ 640, 480 },
+		{ 640, 480 },
+		{ 640, 480 },
 		{ 640, 480 },
 		{ 640, 480 },
 		{ 640, 480 },
