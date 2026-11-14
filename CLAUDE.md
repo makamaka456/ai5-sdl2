@@ -75,3 +75,16 @@ SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./build/ai5 <게임폴더>
 - 켜지면: 대사를 CP949로 읽음(`src/encoding.c`, 표는 `tools/gen_cp949_table.py`로 생성), 폰트는 `fonts/NanumGothic.ttf`, 게임 폴더의 `PATCH/` 안 파일(그림·`DEFMAIN.MES`)을 아카이브보다 먼저 씀.
 - `--korean`이고 INI를 안 주면 `Isaku98.ini` → `AIWINK.INI` 순서로 찾는다.
 - 확인: 유작 한글판(`isaku98.zip`)으로 오프닝·본편 대사·날짜 그림(PATCH/7_22.G16)·안내문(PATCH/DEFMAIN.MES) 한글 표시 확인. 일본어판도 그대로 동작.
+
+## 꽃과뱀 진행 상황 (이어서 할 사람용, 2026-11-14 기준)
+사용자 지시: **중요한 결정이 아니면 묻지 말고 계속 진행. 한도 초기화 후에도 알아서 이어서 작업.**
+
+- 코드: `src/hanahebi.c` (꽃과뱀 모듈), libai5 포크 `makamaka456/libai5` 브랜치 `claude/lucid-tesla-qpa0cp` (GAME_HANAHEBI, CP949, hanahebi sysvar 표)
+- 도구·준비 방법: `tools/re/README-ko.md`
+- 분석 메모·Ghidra 결과: 비공개 저장소 `notes/hanahebi-analysis.md`, `notes/ghidra/HH2D.decompiled.c`
+- **된 것** (스크린샷 확인): LIBLARY.LIB 로드, 배경·전환 효과, 한글 대사창(오버레이), 인물 그림+표정(Util 50/51), BGM/효과음/음성, 클릭 대기 메뉴, 오프닝~본편 여러 장면 진행
+- **지금 막힌 곳**: FAS000.MES 진행 중 라이브러리 코드 0x33bb 근처에서 멈춤. 로그상 선택지로 보임: `Util(1000)`, `Util(1019,0)`, `Util(14/15, 색)`, `System.function[11](8,...)` 미구현
+- **남은 일 (우선순위)**: 선택지(Util 1000번대, [11] op 8/9/10~14) → 검은 화면 독백 글자 → 2D 이동 화면(MAP2DCREATE.MES, data.arc MAP/TBL) → 세이브/로드([4], [26], [24] 목록) → 백로그([19]) → 나머지 Util
+- System 함수 표: 0 글꼴, 2 커서, 5 BGM, 6 효과음, 7 음성, 8 파일/라이브러리, 9 그림, 10 화면 갱신(미구현), 11 그림 연산, 12 대기, 13 색, 18 입력, 19 백로그, 24 화면 기록 목록, 26 ?, 27 INI, 29 시간
+- Util: 23 전환 속도, 50/51 인물, 502/503 대사창 보이기/숨기기, 그 외 대부분 미구현(로그만)
+- Util 분기 함수: HH2D.exe `FUN_00421bd0` (Ghidra 결과에서 `case 0x3e8` 등으로 찾기)
