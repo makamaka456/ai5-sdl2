@@ -97,8 +97,8 @@ static void msgwin_hide(void);
 	{ \
 		log_unimplemented("System.function", n, params); \
 	}
-SYS_STUB(3) SYS_STUB(4) SYS_STUB(5) SYS_STUB(6)
-SYS_STUB(7) SYS_STUB(10)
+SYS_STUB(3) SYS_STUB(4)
+SYS_STUB(10)
 SYS_STUB(14) SYS_STUB(16) SYS_STUB(20)
 SYS_STUB(23) SYS_STUB(24) SYS_STUB(26) SYS_STUB(28)
 
@@ -431,6 +431,111 @@ static void hanahebi_menuexec(void)
 	}
 }
 
+/*
+ * Audio (HH2D.exe 0x44fcd0 BGM, 0x44ffb0 SE, 0x450170 voice).
+ *   BGM:   (0,name[,ch]) play, (1[,ch]) stop, (2[,ch]) fade out,
+ *          (3,name[,ch]) queue, (4[,ch]) play queued
+ *   SE:    (0,name,ch) play, (1,ch) stop, (2,ch) fade out, (3,ch) -> playing?
+ *   Voice: (0,name[,ch]) play, (1[,ch]) stop, (2,name[,ch]) queue,
+ *          (3[,ch]) play queued, (4[,ch]) -> playing?, (5[,ch]) -> queued?
+ * Results go to var32[18].
+ */
+static char bgm_queued[STRING_PARAM_SIZE];
+static char voice_queued[STRING_PARAM_SIZE];
+static bool voice_pending = false;
+
+static bool setting_enabled(const char *section, const char *key)
+{
+	const char *v = config_ini_get(section, key);
+	return !v || atoi(v) != 0;
+}
+
+static void hanahebi_bgm(struct param_list *params)
+{
+	switch (vm_expr_param(params, 0)) {
+	case 0:
+		if (setting_enabled("Music", "IsMusic"))
+			audio_bgm_play(vm_string_param(params, 1), false);
+		break;
+	case 1:
+		audio_stop(AUDIO_CH_BGM);
+		break;
+	case 2:
+		audio_fade(AUDIO_CH_BGM, AUDIO_VOLUME_MIN, 1000, true, false);
+		break;
+	case 3:
+		strncpy(bgm_queued, vm_string_param(params, 1), sizeof(bgm_queued) - 1);
+		break;
+	case 4:
+		if (bgm_queued[0] && setting_enabled("Music", "IsMusic"))
+			audio_bgm_play(bgm_queued, false);
+		break;
+	default:
+		log_unimplemented("System.function", 5, params);
+	}
+}
+
+static unsigned se_channel(struct param_list *params, unsigned i)
+{
+	unsigned ch = param_or(params, i, 0);
+	return audio_se_channel_valid(ch) ? ch : 0;
+}
+
+static void hanahebi_se(struct param_list *params)
+{
+	switch (vm_expr_param(params, 0)) {
+	case 0:
+		if (setting_enabled("Se", "IsSe"))
+			audio_se_play(vm_string_param(params, 1), se_channel(params, 2));
+		break;
+	case 1:
+		audio_se_stop(se_channel(params, 1));
+		break;
+	case 2:
+		audio_se_fade(AUDIO_VOLUME_MIN, 1000, true, false, se_channel(params, 1));
+		break;
+	case 3:
+		set_result(audio_is_playing(AUDIO_CH_SE(se_channel(params, 1))));
+		break;
+	default:
+		log_unimplemented("System.function", 6, params);
+	}
+}
+
+static void hanahebi_voice(struct param_list *params)
+{
+	switch (vm_expr_param(params, 0)) {
+	case 0:
+		if (setting_enabled("Voice", "IsVoice"))
+			audio_voice_play(vm_string_param(params, 1), 0);
+		break;
+	case 1:
+		audio_voice_stop(0);
+		voice_pending = false;
+		break;
+	case 2:
+		strncpy(voice_queued, vm_string_param(params, 1), sizeof(voice_queued) - 1);
+		voice_pending = true;
+		break;
+	case 3:
+		if (voice_pending) {
+			audio_voice_stop(0);
+			if (setting_enabled("Voice", "IsVoice"))
+				audio_voice_play(voice_queued, 0);
+		}
+		voice_pending = false;
+		break;
+	case 4:
+		set_result(audio_is_playing(AUDIO_CH_VOICE0));
+		break;
+	case 5:
+		set_result(voice_pending);
+		break;
+	default:
+		log_unimplemented("System.function", 7, params);
+	}
+}
+
 // System.function[9](name): load a GCC image into the destination surface
 static void hanahebi_load_image(struct param_list *params)
 {
@@ -470,6 +575,8 @@ static void hanahebi_mem_init(void)
 
 static void hanahebi_init(void)
 {
+	// sound effects are in their own archive (se.arc)
+	asset_effect_is_bgm = false;
 }
 
 struct game game_hanahebi = {
@@ -544,9 +651,9 @@ struct game game_hanahebi = {
 		[2]  = hanahebi_cursor,
 		[3]  = sys_stub_3,
 		[4]  = sys_stub_4,
-		[5]  = sys_stub_5,
-		[6]  = sys_stub_6,
-		[7]  = sys_stub_7,
+		[5]  = hanahebi_bgm,
+		[6]  = hanahebi_se,
+		[7]  = hanahebi_voice,
 		[8]  = hanahebi_load,
 		[9]  = hanahebi_load_image,
 		[10] = sys_stub_10,
