@@ -1,3 +1,4 @@
 [submodule "subprojects/libai5"]
 	path = subprojects/libai5
-	url = https://github.com/nunuhara/libai5
+	url = https://github.com/makamaka456/libai5
+	branch = claude/lucid-tesla-qpa0cp
