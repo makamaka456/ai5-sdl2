@@ -105,6 +105,13 @@ SYS_STUB(23) SYS_STUB(24) SYS_STUB(26) SYS_STUB(28)
 static void hanahebi_util(struct param_list *params)
 {
 	switch (vm_expr_param(params, 0)) {
+	case 23: { // transition speed from AI5WIN.INI [DispEffect] Play -> var16[5]
+		const char *v = config_ini_get("DispEffect", "Play");
+		static const uint16_t speed[] = { 8, 16, 32, 64 };
+		unsigned i = v ? atoi(v) : 1;
+		mem_set_var16(5, speed[i < 4 ? i : 1]);
+		break;
+	}
 	case 502: msgwin_show(); break;
 	case 503: msgwin_hide(); break;
 	default:
