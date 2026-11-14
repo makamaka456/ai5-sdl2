@@ -52,6 +52,15 @@ elf-games-private/
 8. 런처 (폰 게임 폴더 목록 → 엔진에 넘기기)
 9. 실기 검수 (사용자가 폰에서 확인)
 
+## PC 빌드 (리눅스 작업 공간)
+```
+apt-get install -y meson libsdl2-dev libsdl2-ttf-dev libsndfile1-dev libavcodec-dev libavformat-dev libswscale-dev
+git submodule update --init --recursive
+meson setup build && ninja -C build
+SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./build/ai5 <게임폴더>
+```
+비공개 저장소는 `/home/user/elf-games-private` 에 클론해 쓴다.
+
 ## 배경 지식
 - 게임 폴더에 `AI5WIN.EXE`가 있으면 AI5WIN, `AI6WIN.exe`가 있으면 AI6WIN.
 - 같은 AI5WIN이라도 시기에 따라 스크립트 형식 차이가 커서 게임마다 전용 코드를 둔다.
