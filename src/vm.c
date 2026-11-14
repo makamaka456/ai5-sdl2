@@ -160,6 +160,10 @@ end:
 
 void vm_load_mes(char *name)
 {
+	if (game_is_nonomura_vm()) {
+		vm_load_mes_with_table(name);
+		return;
+	}
 	char *mem_name = mem_mes_name();
 	if (name != mem_name)
 		strcpy(mem_name, name);
@@ -543,6 +547,11 @@ static void read_zenkaku(char *str)
 	uint8_t c;
 	int str_i = 0;
 	while ((c = vm_peek_byte())) {
+		// CP949 translations mix ASCII (e.g. spaces) into zenkaku text
+		if (text_encoding_is_cp949() && c >= 0x20 && c < 0x7f) {
+			str[str_i++] = vm_read_byte();
+			continue;
+		}
 		if (unlikely(!ai5_char_is_zenkaku(c)))
 			goto unterminated;
 		str[str_i++] = vm_read_byte();
@@ -558,6 +567,12 @@ static void read_hankaku(char *str)
 	uint8_t c;
 	int str_i = 0;
 	while ((c = vm_peek_byte())) {
+		// CP949 translations put 2-byte characters in hankaku text
+		if (text_encoding_is_cp949() && ai5_char_is_zenkaku(c)) {
+			str[str_i++] = vm_read_byte();
+			str[str_i++] = vm_read_byte();
+			continue;
+		}
 		if (unlikely(!ai5_char_is_hankaku(c)))
 			goto unterminated;
 		str[str_i++] = c;
@@ -1179,8 +1194,11 @@ void vm_stmt_menuexec(void)
 
 bool vm_exec_statement(void)
 {
-#if 0
-	if (!game_is_aiwin() || vm.ip.code[vm.ip.ptr] != 0x13) {
+	// set AI5_TRACE=1 in the environment to print each statement
+	static int trace = -1;
+	if (unlikely(trace < 0))
+		trace = getenv("AI5_TRACE") != NULL;
+	if (unlikely(trace) && (!game_is_aiwin() || vm.ip.code[vm.ip.ptr] != 0x13)) {
 		printf("%08x: ", vm.ip.ptr);
 		if (vm.ip.code[vm.ip.ptr] < 0x80) {
 			struct mes_statement *stmt = mes_parse_statement(vm.ip.code + vm.ip.ptr, 8192);
@@ -1194,7 +1212,7 @@ bool vm_exec_statement(void)
 			printf("[unprefixed text]\n");
 		}
 	}
-#endif
+
 
 	uint8_t op = vm_peek_byte();
 retry:
@@ -1314,4 +1332,130 @@ void vm_exec_aiw(void)
 		}
 		vm_peek();
 	}
+}
+
+/*
+ * Nonomura Byouin (2003) / Hana to Hebi (2005) script format.
+ */
+
+uint32_t vm_args[VM_MAX_ARGS];
+struct vm_pointer vm_subs[VM_MAX_SUBS];
+
+#define CHECK_ARG(i) \
+	do { \
+		if (unlikely((i) >= VM_MAX_ARGS)) \
+			VM_ERROR("Invalid argument index: %u", (unsigned)(i)); \
+	} while (0)
+
+void vm_stmt_set_arg_const(void)
+{
+	uint16_t i = vm_read_word();
+	do {
+		CHECK_ARG(i);
+		vm_args[i++] = game->vm.eval();
+	} while (vm_read_byte());
+}
+
+void vm_stmt_set_arg_expr(void)
+{
+	uint32_t i = game->vm.eval();
+	do {
+		CHECK_ARG(i);
+		vm_args[i++] = game->vm.eval();
+	} while (vm_read_byte());
+}
+
+void vm_expr_arg_const(void)
+{
+	uint16_t i = vm_read_word();
+	CHECK_ARG(i);
+	vm_stack_push(vm_args[i]);
+}
+
+void vm_expr_arg_expr(void)
+{
+	uint32_t i = vm_stack_pop();
+	CHECK_ARG(i);
+	vm_stack_push(vm_args[i]);
+}
+
+void vm_stmt_defsub(void)
+{
+	uint32_t i = game->vm.eval();
+	if (unlikely(i >= VM_MAX_SUBS))
+		VM_ERROR("Invalid subroutine number: %u", i);
+	vm_subs[i] = vm.ip;
+	vm_subs[i].ptr += 4;
+	vm.ip.ptr = vm_read_dword();
+}
+
+void vm_call_sub(unsigned no)
+{
+	if (unlikely(no >= VM_MAX_SUBS || !vm_subs[no].code))
+		VM_ERROR("Invalid subroutine number: %u", no);
+	struct vm_pointer saved_ip = vm.ip;
+	vm.ip = vm_subs[no];
+	game->vm.exec();
+	vm.ip = saved_ip;
+}
+
+void vm_stmt_callsub(void)
+{
+	struct param_list params = {0};
+	game->vm.read_params(&params);
+	vm_call_sub(vm_expr_param(&params, 0));
+}
+
+void vm_stmt_menuexec_params(void)
+{
+	struct param_list params = {0};
+	game->vm.read_params(&params);
+	// TODO: meaning of parameters
+	menu_exec();
+}
+
+// statements whose meaning is not yet known: consume operands and continue
+void vm_stmt_skip_dword(void)
+{
+	vm_read_dword();
+}
+
+void vm_stmt_skip_expr(void)
+{
+	game->vm.eval();
+}
+
+void vm_stmt_skip_params(void)
+{
+	struct param_list params = {0};
+	game->vm.read_params(&params);
+}
+
+void vm_stmt_nop(void)
+{
+}
+
+/*
+ * Load a MES file which starts with an address table (u32 count + u32 * count).
+ * Code addresses are relative to the end of the table.
+ */
+void vm_load_mes_with_table(char *name)
+{
+	char *mem_name = mem_mes_name();
+	if (name != mem_name)
+		strcpy(mem_name, name);
+	for (int i = 0; mem_name[i]; i++) {
+		mem_name[i] = toupper(mem_name[i]);
+	}
+	struct archive_data *file = asset_mes_load(name);
+	if (!file)
+		VM_ERROR("Failed to load MES file \"%s\"", name);
+	uint32_t table_size = file->size >= 4 ? 4 + le_get32(file->data, 0) * 4 : 0;
+	if (table_size > file->size)
+		VM_ERROR("Invalid MES address table in \"%s\"", name);
+	if (file->size - table_size > MEMORY_FILE_DATA_SIZE)
+		VM_ERROR("MES file too large: \"%s\"", name);
+	dbg_invalidate(offsetof(struct memory, file_data), file->size - table_size);
+	memcpy(memory.file_data, file->data + table_size, file->size - table_size);
+	archive_data_release(file);
 }

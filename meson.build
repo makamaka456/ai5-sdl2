@@ -51,6 +51,7 @@ sources = [
   'src/gfx.c',
   'src/ini.c',
   'src/input.c',
+  'src/hanahebi.c',
   'src/isaku/isaku.c',
   'src/isaku/item_window.c',
   'src/kakyuusei.c',

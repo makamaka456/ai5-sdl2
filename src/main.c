@@ -165,6 +165,41 @@ static int cfg_handler(void *user, const char *section, const char *name, const 
 	} else if (MATCH("FILE", "VOICE")) {
 		config->file.voice.arc = 1;
 		config->file.voice.name = string_new(value);
+	// Hana to Hebi (2005) style INI: [Common] and [ARC] sections
+	} else if (MATCH("COMMON", "STARTMES")) {
+		config->start_mes = string_new(value);
+	} else if (MATCH("COMMON", "MESTYPE")) {
+		config->mes.mes_type = atoi(value);
+	} else if (MATCH("COMMON", "DATATYPE")) {
+		config->data.data_type = atoi(value);
+	} else if (MATCH("COMMON", "BGTYPE")) {
+		config->graphics.bg_type = atoi(value);
+	} else if (MATCH("ARC", "ISARCMES")) {
+		config->file.mes.arc = atoi(value);
+	} else if (MATCH("ARC", "ARCMESNAME")) {
+		config->file.mes.name = string_new(value);
+	} else if (MATCH("ARC", "ISARCDATA")) {
+		config->file.data.arc = atoi(value);
+	} else if (MATCH("ARC", "ARCDATANAME")) {
+		config->file.data.name = string_new(value);
+	} else if (MATCH("ARC", "ISARCBG")) {
+		config->file.bg.arc = atoi(value);
+	} else if (MATCH("ARC", "ARCBGNAME")) {
+		config->file.bg.name = string_new(value);
+	} else if (MATCH("ARC", "ISARCMUSIC")) {
+		config->file.bgm.arc = atoi(value);
+	} else if (MATCH("ARC", "ARCMUSICNAME")) {
+		config->file.bgm.name = string_new(value);
+	} else if (MATCH("ARC", "ISARCEFFECT")) {
+		config->file.effect.arc = atoi(value);
+	} else if (MATCH("ARC", "ARCEFFECTNAME")) {
+		config->file.effect.name = string_new(value);
+	} else if (MATCH("ARC", "ISARCVOICE")) {
+		config->file.voice.arc = atoi(value);
+	} else if (MATCH("ARC", "ARCVOICENAME")) {
+		config->file.voice.name = string_new(value);
+	} else if (MATCH("ARC", "ISARCMAM") || MATCH("ARC", "ARCMAMNAME")) {
+		// ignore
 	// [GRAPHICS]
 	} else if (MATCH("GRAPHICS", "bBGTYPE")) {
 		config->graphics.bg_type = atoi(value);
@@ -424,6 +459,9 @@ static void set_game(const char *name)
 	case GAME_YUNO:
 		game = &game_yuno;
 		break;
+	case GAME_HANAHEBI:
+		game = &game_hanahebi;
+		break;
 	default:
 		sys_error("Game \"%s\" not supported", name);
 	}
@@ -459,6 +497,8 @@ static bool set_game_from_config(void)
 		name = "kakyuusei";
 	} else if (!strcmp(config.title, "臭作")) {
 		name = "shuusaku";
+	} else if (!strcmp(config.title, "花と蛇")) {
+		name = "hanahebi";
 	}
 	if (!name)
 		return false;
@@ -667,8 +707,12 @@ int main(int argc, char *argv[])
 	if (!config.title) {
 		char *name = path_basename(ini_name);
 		// FIXME: other games probably use aiwin.ini
+		char *hh2d = NULL;
 		if (!strcasecmp(name, "syuusaku.ini") || !strcasecmp(name, "aiwin.ini")) {
 			config.title = string_new("臭作");
+		} else if ((hh2d = path_get_icase("HH2D.exe"))) {
+			free(hh2d);
+			config.title = string_new("花と蛇");
 		} else if (have_game) {
 			config.title = string_new(ai5_games[ai5_target_game].description);
 		} else {
@@ -722,6 +766,8 @@ int main(int argc, char *argv[])
 	DEFAULT_NAME(config.file.data, "DATA.ARC");
 	DEFAULT_NAME(config.file.priv, "PRIV.ARC");
 #undef DEFAULT_NAME
+
+	mes_text_cp949 = text_encoding_is_cp949();
 
 	// intitialize subsystems
 	srand(time(NULL));

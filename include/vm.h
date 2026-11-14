@@ -27,6 +27,8 @@
 
 #define VM_STACK_SIZE 1024
 #define VM_MAX_PROCEDURES 150
+#define VM_MAX_ARGS 64
+#define VM_MAX_SUBS 512
 
 struct archive_data;
 
@@ -169,6 +171,23 @@ void vm_stmt_call_old_log(void);
 void vm_stmt_util(void);
 void vm_stmt_line(void);
 void vm_stmt_line_old_log(void);
+
+// Nonomura Byouin / Hana to Hebi
+extern uint32_t vm_args[VM_MAX_ARGS];
+extern struct vm_pointer vm_subs[VM_MAX_SUBS];
+void vm_stmt_set_arg_const(void);
+void vm_stmt_set_arg_expr(void);
+void vm_expr_arg_const(void);
+void vm_expr_arg_expr(void);
+void vm_stmt_defsub(void);
+void vm_stmt_callsub(void);
+void vm_call_sub(unsigned no);
+void vm_stmt_menuexec_params(void);
+void vm_stmt_skip_dword(void);
+void vm_stmt_skip_expr(void);
+void vm_stmt_skip_params(void);
+void vm_stmt_nop(void);
+void vm_load_mes_with_table(char *name);
 
 #define DEFAULT_EXPR_OP \
 	[0x80] = vm_expr_var16, \

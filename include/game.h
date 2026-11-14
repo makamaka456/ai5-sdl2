@@ -142,6 +142,7 @@ extern struct game game_kakyuusei;
 extern struct game game_shangrlia;
 extern struct game game_shuusaku;
 extern struct game game_yuno;
+extern struct game game_hanahebi;
 
 extern struct game *game;
 
