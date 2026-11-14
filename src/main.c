@@ -80,8 +80,44 @@ static enum config_stick_behavior parse_stick_behavior(const char *str)
 	return CONFIG_STICK_DISABLED;
 }
 
+// INI values not handled by cfg_handler (section, key, value)
+struct ini_extra { char *section, *key, *value; };
+static vector_t(struct ini_extra) ini_extra = vector_initializer;
+static bool ini_new_format = false;
+
+static void ini_extra_set(const char *section, const char *key, const char *value)
+{
+	struct ini_extra *e;
+	vector_foreach_p(e, ini_extra) {
+		if (!strcasecmp(e->section, section) && !strcasecmp(e->key, key)) {
+			free(e->value);
+			e->value = xstrdup(value);
+			return;
+		}
+	}
+	struct ini_extra n = { xstrdup(section), xstrdup(key), xstrdup(value) };
+	vector_push(struct ini_extra, ini_extra, n);
+}
+
+const char *config_ini_get(const char *section, const char *key)
+{
+	struct ini_extra *e;
+	vector_foreach_p(e, ini_extra) {
+		if (!strcasecmp(e->section, section) && !strcasecmp(e->key, key))
+			return e->value;
+	}
+	return NULL;
+}
+
+void config_ini_set(const char *section, const char *key, const char *value)
+{
+	ini_extra_set(section, key, value);
+}
+
 static int cfg_handler(void *user, const char *section, const char *name, const char *value)
 {
+	if (!strcasecmp(section, "Common") || !strcasecmp(section, "ARC"))
+		ini_new_format = true;
 	struct config *config = user;
 
 #define MATCH(s, n) (!strcasecmp(section, s) && !strcasecmp(name, n))
@@ -357,7 +393,10 @@ static int cfg_handler(void *user, const char *section, const char *name, const 
 	} else if (MATCH("CONTROLLER", "UI")) {
 		config->controller.ui = !!atoi(value);
 	} else {
-		WARNING("Unknown INI value: %s.%s", section, name);
+		// keep unknown values; newer games read their INI at runtime
+		ini_extra_set(section, name, value);
+		if (!ini_new_format)
+			WARNING("Unknown INI value: %s.%s", section, name);
 		return 0;
 	}
 #undef MATCH

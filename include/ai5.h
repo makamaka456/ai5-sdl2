@@ -127,6 +127,10 @@ struct config {
 
 extern struct config config;
 
+// values from the game INI not handled by the engine itself
+const char *config_ini_get(const char *section, const char *key);
+void config_ini_set(const char *section, const char *key, const char *value);
+
 extern bool yuno_eng;
 
 void restart(void);

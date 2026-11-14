@@ -1338,7 +1338,8 @@ void vm_exec_aiw(void)
  * Nonomura Byouin (2003) / Hana to Hebi (2005) script format.
  */
 
-uint32_t vm_args[VM_MAX_ARGS];
+static uint32_t vm_args_default[VM_MAX_ARGS];
+uint32_t *vm_args = vm_args_default;
 struct vm_pointer vm_subs[VM_MAX_SUBS];
 
 #define CHECK_ARG(i) \

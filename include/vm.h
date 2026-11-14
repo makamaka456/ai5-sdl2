@@ -173,7 +173,8 @@ void vm_stmt_line(void);
 void vm_stmt_line_old_log(void);
 
 // Nonomura Byouin / Hana to Hebi
-extern uint32_t vm_args[VM_MAX_ARGS];
+// procedure arguments (games may point this into mem16 so it is saved)
+extern uint32_t *vm_args;
 extern struct vm_pointer vm_subs[VM_MAX_SUBS];
 void vm_stmt_set_arg_const(void);
 void vm_stmt_set_arg_expr(void);
