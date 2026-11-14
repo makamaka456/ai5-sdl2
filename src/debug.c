@@ -424,6 +424,8 @@ void dbg_repl(void)
 
 static enum file_type filename_to_type(const char *filename)
 {
+	if (!file_extension(filename))
+		return FILE_OTHER;
 	if (!strcasecmp(file_extension(filename), "A"))
 		return FILE_A;
 	if (!strcasecmp(file_extension(filename), "A6"))

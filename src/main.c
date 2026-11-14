@@ -34,6 +34,7 @@
 #include "audio.h"
 #include "cursor.h"
 #include "debug.h"
+#include "encoding.h"
 #include "game.h"
 #include "gfx.h"
 #include "ini.h"
@@ -341,6 +342,7 @@ static void usage(void)
 	printf("    --game=<game>                  Specify the game to run\n");
 	printf("                                   (valid options are: yuno, yuno-eng)\n");
 	printf("    -h, --help                     Display this message and exit\n");
+	printf("    --korean                       Korean translation mode (CP949 text, PATCH/ folder)\n");
 	printf("    --msg-skip-delay=<ms>          Set the message skip delay time (default: %u)\n",
 			DEFAULT_MSG_SKIP_DELAY);
 	printf("    --no-warp-mouse                Don't move the mouse\n");
@@ -368,6 +370,15 @@ static _Noreturn void _usage_error(const char *fmt, ...)
 
 static void set_game(const char *name)
 {
+	// "<game>-korean": Korean fan translation (CP949 script text)
+	char *base_name = NULL;
+	size_t name_len = strlen(name);
+	if (name_len > 7 && !strcmp(name + name_len - 7, "-korean")) {
+		base_name = xstrdup(name);
+		base_name[name_len - 7] = '\0';
+		name = base_name;
+		text_encoding = TEXT_ENCODING_CP949;
+	}
 	if (!strcmp(name, "yuno-eng")) {
 		yuno_eng = true;
 		name = "yuno";
@@ -416,6 +427,7 @@ static void set_game(const char *name)
 	default:
 		sys_error("Game \"%s\" not supported", name);
 	}
+	free(base_name);
 }
 
 static bool set_game_from_config(void)
@@ -465,6 +477,7 @@ enum {
 	LOPT_FONT,
 	LOPT_FONT_FACE,
 	LOPT_GAME,
+	LOPT_KOREAN,
 	LOPT_MAP_NO_WALLSLIDE,
 	LOPT_NO_WARP_MOUSE,
 	LOPT_MSG_SKIP_DELAY,
@@ -509,6 +522,7 @@ int main(int argc, char *argv[])
 			{ "font", required_argument, 0, LOPT_FONT },
 			{ "font-face", required_argument, 0, LOPT_FONT_FACE },
 			{ "help", no_argument, 0, LOPT_HELP },
+			{ "korean", no_argument, 0, LOPT_KOREAN },
 			{ "msg-skip-delay", required_argument, 0, LOPT_MSG_SKIP_DELAY },
 			{ "no-warp-mouse", no_argument, 0, LOPT_NO_WARP_MOUSE },
 			{ "texthook-clipboard", no_argument, 0, LOPT_TEXTHOOK_CLIPBOARD },
@@ -590,6 +604,9 @@ int main(int argc, char *argv[])
 		case LOPT_TRANSITION_SPEED:
 			config.transition_speed = clamp(0.0, 10.0, atof(optarg));
 			break;
+		case LOPT_KOREAN:
+			text_encoding = TEXT_ENCODING_CP949;
+			break;
 		case LOPT_MAP_NO_WALLSLIDE:
 			config.map_no_wallslide = true;
 			break;
@@ -623,6 +640,12 @@ int main(int argc, char *argv[])
 	}
 
 	// get ini filename if not specified
+	if (!ini_name && text_encoding_is_cp949()) {
+		// Korean translations ship their own INI (used by the loader EXE)
+		ini_name = path_get_icase("Isaku98.ini");
+		if (!ini_name)
+			ini_name = path_get_icase("AIWINK.INI");
+	}
 	if (!ini_name) {
 		// try AI5ENG.INI first (YU-NO Eng TL)
 		ini_name = path_get_icase("AI5ENG.INI");
@@ -661,9 +684,19 @@ int main(int argc, char *argv[])
 		free(our_ini_name);
 	}
 
+	// Korean translation: message archive with .KOR extension
+	if (config.file.mes.arc && config.file.mes.name) {
+		const char *ext = file_extension(config.file.mes.name);
+		if (ext && !strcasecmp(ext, "KOR"))
+			text_encoding = TEXT_ENCODING_CP949;
+	}
+
 	string exe_name = file_replace_extension(ini_name, "EXE");
 	config.exe_path = path_get_icase(exe_name);
 	string_free(exe_name);
+	// INI may not be named after the EXE (e.g. Isaku98.ini)
+	if (!config.exe_path)
+		config.exe_path = path_get_icase("AI5WIN.EXE");
 	free(ini_name);
 
 	if (!have_game && !set_game_from_config()) {

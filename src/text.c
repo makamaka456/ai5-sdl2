@@ -25,6 +25,7 @@
 #include "gfx_private.h"
 #include "gfx.h"
 #include "memory.h"
+#include "encoding.h"
 
 #ifndef AI5_DATA_DIR
 #define AI5_DATA_DIR "."
@@ -149,6 +150,15 @@ static void init_fonts_standard(void)
 #endif
 }
 
+static void init_fonts_korean(void)
+{
+	// CP949 text: use a font that covers all of KS X 1001 (Hangul, Hanja
+	// and kana), since the Japanese fonts have no Hangul glyphs.
+	font_spec[FONT_SMALL].path = xstrdup(AI5_DATA_DIR "/fonts/NanumGothic.ttf");
+	font_spec[FONT_LARGE].path = xstrdup(font_spec[FONT_SMALL].path);
+	font_spec[FONT_ENG].path = xstrdup(font_spec[FONT_SMALL].path);
+}
+
 void gfx_text_init(const char *font_path, int face)
 {
 	if (TTF_Init() == -1)
@@ -171,6 +181,8 @@ void gfx_text_init(const char *font_path, int face)
 		font_spec[FONT_LARGE].face = face;
 		font_spec[FONT_ENG].path = xstrdup(font_path);
 		font_spec[FONT_ENG].face = face_eng;
+	} else if (text_encoding_is_cp949()) {
+		init_fonts_korean();
 	} else {
 #ifdef _WIN32
 		if (game->bpp == 8) {

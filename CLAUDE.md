@@ -50,8 +50,8 @@ elf-games-private/
 1. 정찰 → `docs/structure-ko.md` ✅
 2. PC 빌드 확인 ✅
 3. 참고 APK 분석 → 비공개 `notes/apk-analysis.md` ("찾은 것 / 우리 구현에 쓸 방법 / 모르는 것") ✅
-4. 비교용 게임(참고 APK가 돌리는 한글패치 게임 1개)으로 PC에서 화면·한글 확인
-5. 참고 APK와 다른 점(한글 처리 등)을 우리 소스에 구현
+4. 비교용 게임(참고 APK가 돌리는 한글패치 게임 1개)으로 PC에서 화면·한글 확인 ✅
+5. 참고 APK와 다른 점(한글 처리 등)을 우리 소스에 구현 ✅ (유작)
 6. 안드로이드 빌드 (`android/`, NDK, Actions 산출물) + 런처
 7. 실기 검수 → 1막 끝
 8. 꽃과뱀 모듈 추가 (유작 리뉴얼 또는 취작 모듈에서 시작) → PC 확인 → APK → 실기 검수
@@ -69,3 +69,9 @@ SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./build/ai5 <게임폴더>
 - 게임 폴더에 `AI5WIN.EXE`가 있으면 AI5WIN, `AI6WIN.exe`가 있으면 AI6WIN.
 - 같은 AI5WIN이라도 시기에 따라 스크립트 형식 차이가 커서 게임마다 전용 코드를 둔다.
 - 구조 정리는 `docs/structure-ko.md` 참고.
+
+## 한글판 모드 (5단계에서 추가)
+- `--korean` 옵션, `--game=<게임>-korean`, 또는 INI의 대사 아카이브 이름이 `.KOR`면 켜진다.
+- 켜지면: 대사를 CP949로 읽음(`src/encoding.c`, 표는 `tools/gen_cp949_table.py`로 생성), 폰트는 `fonts/NanumGothic.ttf`, 게임 폴더의 `PATCH/` 안 파일(그림·`DEFMAIN.MES`)을 아카이브보다 먼저 씀.
+- `--korean`이고 INI를 안 주면 `Isaku98.ini` → `AIWINK.INI` 순서로 찾는다.
+- 확인: 유작 한글판(`isaku98.zip`)으로 오프닝·본편 대사·날짜 그림(PATCH/7_22.G16)·안내문(PATCH/DEFMAIN.MES) 한글 표시 확인. 일본어판도 그대로 동작.

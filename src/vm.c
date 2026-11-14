@@ -42,6 +42,7 @@
 #include "menu.h"
 #include "texthook.h"
 #include "vm_private.h"
+#include "encoding.h"
 
 struct vm vm = {0};
 struct memory memory = {0};
@@ -505,7 +506,7 @@ void vm_draw_text(const char *text, unsigned mult)
 	bool last_char_is_close = false;
 	while (*text) {
 		int ch;
-		bool zenkaku = SJIS_2BYTE(*text);
+		bool zenkaku = ai5_char_is_2byte(*text);
 		uint16_t this_char_space = zenkaku ? (char_space / mult): (char_space / (mult * 2));
 		uint16_t this_x = x;
 		if (x + (han_line_breaks ? this_char_space : char_space) > end_x) {
@@ -529,7 +530,7 @@ void vm_draw_text(const char *text, unsigned mult)
 			last_char_is_close = false;
 		}
 
-		text = sjis_char2unicode(text, &ch);
+		text = ai5_char_to_unicode(text, &ch);
 		gfx_text_draw_glyph(x * mult, y, surface, ch);
 		x += this_char_space;
 	}
@@ -542,7 +543,7 @@ static void read_zenkaku(char *str)
 	uint8_t c;
 	int str_i = 0;
 	while ((c = vm_peek_byte())) {
-		if (unlikely(!mes_char_is_zenkaku(c)))
+		if (unlikely(!ai5_char_is_zenkaku(c)))
 			goto unterminated;
 		str[str_i++] = vm_read_byte();
 		str[str_i++] = vm_read_byte();
@@ -557,7 +558,7 @@ static void read_hankaku(char *str)
 	uint8_t c;
 	int str_i = 0;
 	while ((c = vm_peek_byte())) {
-		if (unlikely(!mes_char_is_hankaku(c)))
+		if (unlikely(!ai5_char_is_hankaku(c)))
 			goto unterminated;
 		str[str_i++] = c;
 		vm_read_byte();
@@ -1204,7 +1205,7 @@ retry:
 			op = dbg_handle_breakpoint((vm.ip.code + vm.ip.ptr - 1) - memory_raw);
 			goto retry;
 		}
-		if (mes_char_is_hankaku(op)) {
+		if (ai5_char_is_hankaku(op)) {
 			if (game->unprefixed_han)
 				game->unprefixed_han();
 			else

@@ -14,14 +14,18 @@
  * along with this program; if not, see <http://gnu.org/licenses/>.
  */
 
+#include <sys/stat.h>
+
 #include "nulib.h"
 #include "nulib/file.h"
 #include "nulib/queue.h"
 #include "ai5/arc.h"
 #include "ai5/cg.h"
+#include "ai5/lzss.h"
 
 #include "ai5.h"
 #include "asset.h"
+#include "encoding.h"
 #include "game.h"
 
 static struct archive *arc[NR_ASSET_TYPES] = {0};
@@ -36,6 +40,62 @@ char *asset_voicesub_name = NULL;
 char *asset_data_name = NULL;
 
 bool asset_effect_is_bgm = true;
+
+// Korean translations put replacement files (translated CGs, DEFMAIN.MES) in
+// a PATCH/ folder next to the archives. On Windows the loader EXE redirects
+// AI5WIN.EXE to these files; we check this folder before the archives.
+static char *patch_dir = NULL;
+
+static void patch_dir_init(void)
+{
+	free(patch_dir);
+	patch_dir = NULL;
+	if (!text_encoding_is_cp949())
+		return;
+	char *path = path_get_icase("PATCH");
+	if (!path)
+		return;
+	ustat s;
+	if (!stat_utf8(path, &s) && S_ISDIR(s.st_mode)) {
+		NOTICE("Korean mode: using replacement files from %s/", path);
+		patch_dir = path;
+	} else {
+		free(path);
+	}
+}
+
+struct archive_data *asset_fs_load(const char *_name);
+
+static struct archive_data *patch_load(struct archive *ar, const char *name, bool compressed)
+{
+	if (!patch_dir)
+		return NULL;
+	char *path = xmalloc(strlen(patch_dir) + strlen(name) + 2);
+	sprintf(path, "%s/%s", patch_dir, name);
+	struct archive_data *file = asset_fs_load(path);
+	free(path);
+	if (!file)
+		return NULL;
+
+	// use the archive's name for this entry (the debugger relies on it)
+	int i = archive_get_index(ar, name);
+	if (i >= 0)
+		file->name = ar->files.a[i].name;
+	if (!compressed)
+		return file;
+
+	size_t size;
+	uint8_t *data = lzss_decompress(file->data, file->size, &size);
+	if (!data) {
+		WARNING("Failed to decompress PATCH/%s", name);
+		archive_data_release(file);
+		return NULL;
+	}
+	free(file->data);
+	file->data = data;
+	file->size = size;
+	return file;
+}
 
 static void cg_cache_init(void);
 
@@ -79,6 +139,7 @@ void asset_init(void)
 #undef ARC_OPEN
 
 	cg_cache_init();
+	patch_dir_init();
 }
 
 void asset_fini(void)
@@ -216,7 +277,9 @@ struct archive_data *_asset_cg_load(const char *name)
 {
 	if (!arc[ASSET_BG])
 		return asset_fs_load(name);
-	struct archive_data *file = archive_get(arc[ASSET_BG], name);
+	struct archive_data *file = patch_load(arc[ASSET_BG], name, false);
+	if (!file)
+		file = archive_get(arc[ASSET_BG], name);
 	if (!file)
 		return NULL;
 	free(asset_cg_name);
@@ -354,7 +417,9 @@ struct archive_data *asset_data_load(const char *name)
 {
 	if (!arc[ASSET_DATA])
 		return asset_fs_load(name);
-	struct archive_data *file = archive_get(arc[ASSET_DATA], name);
+	struct archive_data *file = patch_load(arc[ASSET_DATA], name, config.data.data_type);
+	if (!file)
+		file = archive_get(arc[ASSET_DATA], name);
 	if (!file)
 		return NULL;
 	free(asset_data_name);
