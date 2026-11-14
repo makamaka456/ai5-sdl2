@@ -49,7 +49,7 @@ elf-games-private/
 ## 작업 순서
 1. 정찰 → `docs/structure-ko.md` ✅
 2. PC 빌드 확인 ✅
-3. 참고 APK 분석 → 비공개 `notes/apk-analysis.md` ("찾은 것 / 우리 구현에 쓸 방법 / 모르는 것")
+3. 참고 APK 분석 → 비공개 `notes/apk-analysis.md` ("찾은 것 / 우리 구현에 쓸 방법 / 모르는 것") ✅
 4. 비교용 게임(참고 APK가 돌리는 한글패치 게임 1개)으로 PC에서 화면·한글 확인
 5. 참고 APK와 다른 점(한글 처리 등)을 우리 소스에 구현
 6. 안드로이드 빌드 (`android/`, NDK, Actions 산출물) + 런처
