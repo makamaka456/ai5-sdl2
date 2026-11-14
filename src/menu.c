@@ -30,7 +30,15 @@ static int menu_index = 0;
 // table mapping menu numbers (defmenu argument) to address indices
 static unsigned menu_no_to_index_table[MEMORY_MENU_ENTRY_MAX] = {0};
 
-static unsigned count_entries(void)
+unsigned menu_count_entries(void);
+#define count_entries menu_count_entries
+
+void menu_reset(void)
+{
+	menu_initialized = false;
+}
+
+unsigned menu_count_entries(void)
 {
 	for (unsigned i = 0; i < MEMORY_MENU_ENTRY_MAX; i++) {
 		if (!memory.menu_entry_addresses[i])

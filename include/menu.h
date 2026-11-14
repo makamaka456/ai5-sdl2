@@ -19,6 +19,9 @@
 
 void menu_define(unsigned menu_no, bool empty);
 void menu_exec(void);
+// start a new menu on the next menu_define
+void menu_reset(void);
+unsigned menu_count_entries(void);
 void menu_get_no(unsigned index);
 
 #endif // AI5_MENU_H

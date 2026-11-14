@@ -43,6 +43,7 @@
 #include "sys.h"
 #include "vm.h"
 #include "input.h"
+#include "menu.h"
 #include "cursor.h"
 #include "vm_private.h"
 
@@ -113,7 +114,7 @@ static void msgwin_hide(void);
 	}
 SYS_STUB(3) SYS_STUB(4)
 SYS_STUB(10)
-SYS_STUB(14) SYS_STUB(16) SYS_STUB(20)
+
 SYS_STUB(23) SYS_STUB(24) SYS_STUB(26) SYS_STUB(28)
 
 /*
@@ -293,8 +294,91 @@ static void util_characters_direct(struct param_list *params)
 	}
 }
 
+/*
+ * Buttons (Util 200-203): rectangles copied from a surface and shown on top
+ * of the screen (overlay 1) until removed. Used by choice menus.
+ *   200(x, y, w, h, id)               define button
+ *   201(id)                           remove
+ *   202(x, y, w, h, src, _, _, id)    set image (from src surface at x,y)
+ *   203(id)                           show
+ */
+#define NR_BUTTONS 32
+static struct { bool defined, visible; int x, y, w, h; unsigned src; } buttons[NR_BUTTONS];
+
+static void buttons_redraw(void)
+{
+	SDL_Surface *ov = gfx_get_overlay(1);
+	SDL_CALL(SDL_FillRect, ov, NULL, SDL_MapRGBA(ov->format, 0, 0, 0, 0));
+	bool any = false;
+	uint32_t mask = mem_get_sysvar32(mes_sysvar32_mask_color);
+	for (int i = 0; i < NR_BUTTONS; i++) {
+		if (!buttons[i].defined || !buttons[i].visible)
+			continue;
+		SDL_Surface *src = gfx_get_surface(buttons[i].src);
+		SDL_Rect r = { buttons[i].x, buttons[i].y, buttons[i].w, buttons[i].h };
+		SDL_Rect d = r;
+		SDL_CALL(SDL_SetColorKey, src, SDL_TRUE, SDL_MapRGB(src->format,
+				(mask >> 16) & 0xff, (mask >> 8) & 0xff, mask & 0xff));
+		SDL_CALL(SDL_BlitSurface, src, &r, ov, &d);
+		SDL_CALL(SDL_SetColorKey, src, SDL_FALSE, 0);
+		any = true;
+	}
+	if (any)
+		gfx_overlay_enable(1);
+	else
+		gfx_overlay_disable(1);
+	gfx_screen_dirty();
+}
+
+static bool util_buttons(unsigned no, struct param_list *params)
+{
+	unsigned id;
+	switch (no) {
+	case 200:
+		id = param_or(params, 5, 0);
+		if (id >= NR_BUTTONS) return true;
+		buttons[id].defined = true;
+		buttons[id].visible = false;
+		buttons[id].x = param_or(params, 1, 0);
+		buttons[id].y = param_or(params, 2, 0);
+		buttons[id].w = param_or(params, 3, 0);
+		buttons[id].h = param_or(params, 4, 0);
+		buttons[id].src = 5;
+		return true;
+	case 201:
+		id = param_or(params, 1, 0);
+		if (id < NR_BUTTONS && buttons[id].defined) {
+			buttons[id].defined = false;
+			buttons_redraw();
+		}
+		return true;
+	case 202:
+		id = param_or(params, 8, 0);
+		if (id >= NR_BUTTONS) return true;
+		buttons[id].defined = true;
+		buttons[id].x = param_or(params, 1, 0);
+		buttons[id].y = param_or(params, 2, 0);
+		buttons[id].w = param_or(params, 3, 0);
+		buttons[id].h = param_or(params, 4, 0);
+		buttons[id].src = param_or(params, 5, 5);
+		if (buttons[id].visible)
+			buttons_redraw();
+		return true;
+	case 203:
+		id = param_or(params, 1, 0);
+		if (id < NR_BUTTONS && buttons[id].defined) {
+			buttons[id].visible = true;
+			buttons_redraw();
+		}
+		return true;
+	}
+	return false;
+}
+
 static void hanahebi_util(struct param_list *params)
 {
+	if (util_buttons(vm_expr_param(params, 0), params))
+		return;
 	switch (vm_expr_param(params, 0)) {
 	case 50:
 		util_characters(params);
@@ -400,6 +484,22 @@ static void hanahebi_graphics(struct param_list *params)
 		break;
 	case 2: // fill rect on dst_surface
 		gfx_fill(sx, sy, w, h, mem_get_sysvar16(mes_sysvar16_dst_surface), fill_color);
+		break;
+	case 8: // copy (TODO: second operation of HH2D.exe 0x43e290)
+	case 0xc:
+		gfx_copy(sx, sy, w, h, src_i, dx, dy, dst_i);
+		break;
+	case 9: // copy with transparent color
+		gfx_copy_masked(sx, sy, w, h, src_i, dx, dy, dst_i,
+				mem_get_sysvar32(mes_sysvar32_mask_color));
+		break;
+	case 0xb: // fill dst_surface with color param 7
+		gfx_fill(sx, sy, w, h, mem_get_sysvar16(mes_sysvar16_dst_surface),
+				param_or(params, 7, 0));
+		break;
+	case 0xa:
+	case 0xd: // clear rect on dst_surface
+		gfx_fill(sx, sy, w, h, mem_get_sysvar16(mes_sysvar16_dst_surface), 0);
 		break;
 	case 6: { // blend: (6, ax, ay, abr_x, abr_y, a_i, bx, by, b_i, dst_x, dst_y, _, alpha)
 		unsigned b_i = dst_i;
@@ -577,6 +677,50 @@ static void hanahebi_settings(struct param_list *params)
 	}
 }
 
+/*
+ * Choices are defined with defmenu(n) { "text"; } and the addresses of the
+ * entries are in System.var32[7] (memory.menu_entry_addresses); the number of
+ * entries is in sysvar16[21].
+ */
+
+// System.function[14](addr): run the menu entry at addr (draws its text)
+static void hanahebi_draw_string(struct param_list *params)
+{
+	uint32_t addr = param_or(params, 0, 0);
+	if (addr >= sizeof(struct memory))
+		return;
+	struct vm_pointer saved_ip = vm.ip;
+	vm.ip.code = memory_raw;
+	vm.ip.ptr = addr;
+	game->vm.exec();
+	vm.ip = saved_ip;
+}
+
+// System.function[20](addr): var32[18] = length (bytes) of the menu entry text
+static void hanahebi_strlen(struct param_list *params)
+{
+	uint32_t addr = param_or(params, 0, 0);
+	if (addr + 1 >= sizeof(struct memory)) {
+		set_result(0);
+		return;
+	}
+	// skip TXT/STR opcode
+	char *str = mem_get_cstring(addr + 1);
+	set_result(str ? strlen(str) : 0);
+}
+
+// System.function[16](i): sysvar16[22] = menu number of entry i
+static void hanahebi_menu_get_no(struct param_list *params)
+{
+	menu_get_no(param_or(params, 0, 0));
+}
+
+static void hanahebi_defmenu(void)
+{
+	vm_stmt_defmenu();
+	mem_set_sysvar16(mes_sysvar16_nr_menu_entries, menu_count_entries());
+}
+
 // System.function[29](): var32[18] = time in milliseconds
 static void hanahebi_get_time(struct param_list *params)
 {
@@ -592,6 +736,7 @@ static void hanahebi_menuexec(void)
 {
 	struct param_list params = {0};
 	game->vm.read_params(&params);
+	menu_reset();
 	vm_call_procedure(8);
 	while (!vm_flag_is_on(FLAG_MENU_RETURN) && !vm_flag_is_on(FLAG_RETURN)) {
 		vm_call_procedure(9);
@@ -824,7 +969,7 @@ struct game game_hanahebi = {
 		[0x0d] = vm_stmt_sys,
 		[0x0e] = vm_stmt_mesjmp,
 		[0x0f] = vm_stmt_mescall,
-		[0x10] = vm_stmt_defmenu,
+		[0x10] = hanahebi_defmenu,
 		[0x11] = vm_stmt_call,
 		[0x12] = hanahebi_stmt_util,
 		[0x13] = vm_stmt_line,
@@ -854,11 +999,11 @@ struct game game_hanahebi = {
 		[11] = hanahebi_graphics,
 		[12] = hanahebi_wait,
 		[13] = hanahebi_set_colors,
-		[14] = sys_stub_14,
-		[16] = sys_stub_16,
+		[14] = hanahebi_draw_string,
+		[16] = hanahebi_menu_get_no,
 		[18] = hanahebi_check_input,
 		[19] = hanahebi_backlog,
-		[20] = sys_stub_20,
+		[20] = hanahebi_strlen,
 		[23] = sys_stub_23,
 		[24] = sys_stub_24,
 		[26] = sys_stub_26,
