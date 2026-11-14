@@ -37,6 +37,7 @@
 #include "encoding.h"
 #include "game.h"
 #include "gfx.h"
+#include "gfx_private.h"
 #include "memory.h"
 #include "sys.h"
 #include "vm.h"
@@ -88,6 +89,9 @@ static void log_unimplemented(const char *what, unsigned no, struct param_list *
 	string_free(s);
 }
 
+static void msgwin_show(void);
+static void msgwin_hide(void);
+
 #define SYS_STUB(n) \
 	static void sys_stub_##n(struct param_list *params) \
 	{ \
@@ -100,7 +104,12 @@ SYS_STUB(23) SYS_STUB(24) SYS_STUB(26) SYS_STUB(28)
 
 static void hanahebi_util(struct param_list *params)
 {
-	log_unimplemented("Util", vm_expr_param(params, 0), params);
+	switch (vm_expr_param(params, 0)) {
+	case 502: msgwin_show(); break;
+	case 503: msgwin_hide(); break;
+	default:
+		log_unimplemented("Util", vm_expr_param(params, 0), params);
+	}
 }
 
 // Util numbers go far beyond GAME_MAX_UTIL (e.g. 503, 12000)
@@ -215,11 +224,71 @@ static void hanahebi_graphics(struct param_list *params)
 	}
 }
 
-// System.function[13](c1, c2): colors used by fill operations
+// System.function[13](bg, fg): fill color and text color
 static void hanahebi_set_colors(struct param_list *params)
 {
 	fill_color = param_or(params, 0, 0);
 	fill_color2 = param_or(params, 1, 0);
+	gfx_text_set_colors(fill_color, fill_color2);
+}
+
+/*
+ * Message window. Text is drawn on surface 9 (640x128, transparent color =
+ * fill color 0) and shown at the bottom of the screen over a darkened box.
+ * Util(502) shows it, Util(503) hides it.
+ * TODO: exact behavior of HH2D.exe (object at +0x21778)
+ */
+#define MSGWIN_SURFACE 9
+#define MSGWIN_Y       352
+#define MSGWIN_H       128
+static bool msgwin_visible = false;
+
+// draw the message window into overlay 0 (shown on top of the screen)
+static void msgwin_compose(void)
+{
+	const char *a = config_ini_get("Mes", "nAlpha");
+	unsigned alpha = a ? atoi(a) : 128;
+	SDL_Surface *ov = gfx_get_overlay(0);
+	SDL_CALL(SDL_FillRect, ov, NULL, SDL_MapRGBA(ov->format, 0, 0, 0, 0));
+	SDL_Rect r = { 0, MSGWIN_Y, 640, MSGWIN_H };
+	SDL_CALL(SDL_FillRect, ov, &r, SDL_MapRGBA(ov->format, 0, 0, 0, alpha));
+	SDL_Surface *text = gfx_get_surface(MSGWIN_SURFACE);
+	SDL_Rect src = { 0, 0, 640, MSGWIN_H };
+	SDL_CALL(SDL_SetColorKey, text, SDL_TRUE, SDL_MapRGB(text->format, 0, 0, 0));
+	SDL_CALL(SDL_BlitSurface, text, &src, ov, &r);
+	SDL_CALL(SDL_SetColorKey, text, SDL_FALSE, 0);
+	gfx_overlay_enable(0);
+	gfx_screen_dirty();
+}
+
+static void msgwin_show(void)
+{
+	if (getenv("HH_DEBUG_TEXT")) NOTICE("msgwin show");
+	msgwin_visible = true;
+	msgwin_compose();
+}
+
+static void msgwin_hide(void)
+{
+	if (getenv("HH_DEBUG_TEXT")) NOTICE("msgwin hide");
+	msgwin_visible = false;
+	gfx_overlay_disable(0);
+	gfx_screen_dirty();
+}
+
+static void hanahebi_draw_text(const char *text)
+{
+	if (getenv("HH_DEBUG_TEXT"))
+		NOTICE("text dst=%u cur=%u,%u start=%u,%u end=%u,%u space=%u,%u font=%u",
+			mem_get_sysvar16(mes_sysvar16_dst_surface),
+			mem_get_sysvar16(mes_sysvar16_text_cursor_x), mem_get_sysvar16(mes_sysvar16_text_cursor_y),
+			mem_get_sysvar16(mes_sysvar16_text_start_x), mem_get_sysvar16(mes_sysvar16_text_start_y),
+			mem_get_sysvar16(mes_sysvar16_text_end_x), mem_get_sysvar16(mes_sysvar16_text_end_y),
+			mem_get_sysvar16(mes_sysvar16_char_space), mem_get_sysvar16(mes_sysvar16_line_space),
+			mem_get_sysvar16(mes_sysvar16_font_height));
+	vm_draw_text(text, 1);
+	if (msgwin_visible && mem_get_sysvar16(mes_sysvar16_dst_surface) == MSGWIN_SURFACE)
+		msgwin_compose();
 }
 
 // System.function[12](): wait for click; [12](ms): wait
@@ -426,6 +495,8 @@ struct game game_hanahebi = {
 	.mem_init = hanahebi_mem_init,
 	.mem_restore = hanahebi_mem_restore,
 	.init = hanahebi_init,
+	.draw_text_zen = hanahebi_draw_text,
+	.draw_text_han = hanahebi_draw_text,
 	.vm = VM_AI5,
 	.expr_op = {
 		DEFAULT_EXPR_OP,
