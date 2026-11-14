@@ -1,0 +1,12 @@
+# 빌드 결과
+build/
+builddir/
+
+# 저작권 자료 — 공개 포크에 절대 올리지 않음
+games/
+patches/
+reference-apk/
+unpacked/
+*.apk
+*.arc
+*.ARC
