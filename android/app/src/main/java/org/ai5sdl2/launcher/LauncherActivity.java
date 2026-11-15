@@ -45,6 +45,7 @@ import java.util.List;
 public class LauncherActivity extends Activity {
     private static final int REQ_TREE = 1;
     private static final int REQ_PERM = 2;
+    private static final int REQ_IMAGE = 3;
     private static final String PREFS = "launcher";
 
     // games supported by the engine: id (--game=), name shown, note
@@ -81,10 +82,12 @@ public class LauncherActivity extends Activity {
     protected void onResume() {
         super.onResume();
         updateStatus();
+        if (adapter != null)
+            adapter.notifyDataSetChanged();
     }
 
     private SharedPreferences prefs() {
-        return getSharedPreferences(PREFS, MODE_PRIVATE);
+        return Settings.prefs(this);
     }
 
     private String folderOf(int i) {
@@ -151,7 +154,7 @@ public class LauncherActivity extends Activity {
         root.addView(row);
         Button pad = new Button(this);
         pad.setText("게임패드 버튼 설정");
-        pad.setOnClickListener(v -> padSettings());
+        pad.setOnClickListener(v -> Settings.padSettings(this, null));
         root.addView(pad, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -165,16 +168,7 @@ public class LauncherActivity extends Activity {
 
             @Override
             public View getView(int pos, View convert, ViewGroup parent) {
-                View v = super.getView(pos, convert, parent);
-                TextView t1 = v.findViewById(android.R.id.text1);
-                TextView t2 = v.findViewById(android.R.id.text2);
-                String folder = folderOf(pos);
-                t1.setText(GAMES[pos][1]);
-                t1.setTextColor(folder != null ? Color.WHITE : 0xFF999999);
-                String note = GAMES[pos][2].isEmpty() ? "" : "  (" + GAMES[pos][2] + ")";
-                t2.setText((folder != null ? folder : "폴더 미지정 — 눌러서 게임 폴더 고르기") + note);
-                t2.setTextColor(folder != null ? 0xFF9AD29A : 0xFF888888);
-                return v;
+                return gameRow(pos);
             }
         };
         for (String[] g : GAMES)
@@ -307,6 +301,13 @@ public class LauncherActivity extends Activity {
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
+        if (req == REQ_IMAGE && res == RESULT_OK && data != null && data.getData() != null
+                && pickingFor >= 0) {
+            if (!Settings.saveBackground(this, GAMES[pickingFor][0], data.getData()))
+                status("그림을 읽을 수 없습니다.");
+            adapter.notifyDataSetChanged();
+            return;
+        }
         if (req != REQ_TREE || res != RESULT_OK || data == null || data.getData() == null
                 || pickingFor < 0)
             return;
@@ -401,126 +402,70 @@ public class LauncherActivity extends Activity {
         Intent i = new Intent(this, GameActivity.class);
         i.putExtra(GameActivity.EXTRA_PATH, folder);
         i.putExtra(GameActivity.EXTRA_ARGS, new String[] { "--game=" + GAMES[game][0] });
-        i.putExtra(GameActivity.EXTRA_STRETCH, prefs().getBoolean("stretch", true));
-        i.putExtra(GameActivity.EXTRA_CONTROLLER, controllerConfig());
+        i.putExtra(GameActivity.EXTRA_GAME, GAMES[game][0]);
         startActivity(i);
     }
 
-    // ---------------------------------------------------------------- gamepad
 
-    // controller buttons (engine INI [CONTROLLER] names) and their labels
-    static final String[][] PAD_BUTTONS = {
-        { "A", "A" }, { "B", "B" }, { "X", "X" }, { "Y", "Y" },
-        { "LEFTSHOULDER", "L1" }, { "RIGHTSHOULDER", "R1" },
-        { "LEFTTRIGGER", "L2" }, { "RIGHTTRIGGER", "R2" },
-        { "BACK", "SELECT" }, { "START", "START" },
-        { "LEFTSTICK", "L3 (왼쪽 스틱 누르기)" }, { "RIGHTSTICK", "R3 (오른쪽 스틱 누르기)" },
-        { "UP", "방향키 위" }, { "DOWN", "방향키 아래" }, { "LEFT", "방향키 왼쪽" }, { "RIGHT", "방향키 오른쪽" },
-    };
-    // defaults for these games (A decide, B menu, X skip, Y hide window, L1 backlog)
-    static final String[] PAD_DEFAULTS = {
-        "ENTER", "ESCAPE", "CTRL", "SPACE", "BACKSPACE", "SHIFT", "PAGEUP", "PAGEDOWN",
-        "NONE", "ESCAPE", "NONE", "NONE", "UP", "DOWN", "LEFT", "RIGHT",
-    };
-    static final String[][] PAD_ACTIONS = {
-        { "ENTER", "결정 / 클릭 (Enter)" }, { "ESCAPE", "메뉴 / 취소 (오른쪽 클릭)" },
-        { "CTRL", "넘기기 (누르는 동안 Ctrl)" }, { "SPACE", "대사창 숨기기 (Space)" },
-        { "BACKSPACE", "지난 대사 (Backspace)" }, { "SHIFT", "화면 효과 빨리 (Shift)" },
-        { "UP", "위" }, { "DOWN", "아래" }, { "LEFT", "왼쪽" }, { "RIGHT", "오른쪽" },
-        { "PAGEUP", "Page Up" }, { "PAGEDOWN", "Page Down" }, { "NONE", "없음" },
-    };
-    static final String[][] STICK_MODES = {
-        { "CURSOR", "마우스 커서 움직이기" }, { "DPAD", "방향키로 쓰기" }, { "DISABLED", "쓰지 않기" },
-    };
-
-    private String padValue(int i) {
-        return prefs().getString("pad." + PAD_BUTTONS[i][0], PAD_DEFAULTS[i]);
+    // one line of the game list: name, folder and a [배경화면] button
+    private View gameRow(int pos) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(8, 12, 8, 12);
+        row.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
+        LinearLayout texts = new LinearLayout(this);
+        texts.setOrientation(LinearLayout.VERTICAL);
+        TextView t1 = new TextView(this);
+        TextView t2 = new TextView(this);
+        String folder = folderOf(pos);
+        t1.setText(GAMES[pos][1]);
+        t1.setTextSize(17);
+        t1.setTextColor(folder != null ? Color.WHITE : 0xFF999999);
+        String note = GAMES[pos][2].isEmpty() ? "" : "  (" + GAMES[pos][2] + ")";
+        t2.setText((folder != null ? folder : "폴더 미지정 — 눌러서 게임 폴더 고르기") + note);
+        t2.setTextSize(12);
+        t2.setTextColor(folder != null ? 0xFF9AD29A : 0xFF888888);
+        texts.addView(t1);
+        texts.addView(t2);
+        row.addView(texts, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        Button bg = new Button(this);
+        boolean hasBg = !Settings.backgroundPath(this, GAMES[pos][0]).isEmpty();
+        bg.setText(hasBg ? "배경화면 ✓" : "배경화면");
+        bg.setFocusable(false);
+        bg.setOnClickListener(v -> backgroundMenu(pos));
+        row.addView(bg);
+        return row;
     }
 
-    private static String label(String[][] table, String value) {
-        for (String[] e : table) {
-            if (e[0].equals(value))
-                return e[1];
+    private void backgroundMenu(int game) {
+        String id = GAMES[game][0];
+        if (Settings.backgroundPath(this, id).isEmpty()) {
+            pickImage(game);
+            return;
         }
-        return value;
-    }
-
-    // value for the engine: "A=ENTER;B=ESCAPE;...;LEFTANALOG=CURSOR"
-    private String controllerConfig() {
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < PAD_BUTTONS.length; i++)
-            sb.append(PAD_BUTTONS[i][0]).append('=').append(padValue(i)).append(';');
-        sb.append("LEFTANALOG=").append(prefs().getString("pad.LEFTANALOG", "CURSOR")).append(';');
-        sb.append("RIGHTANALOG=").append(prefs().getString("pad.RIGHTANALOG", "DPAD")).append(';');
-        sb.append("CURSORSPEED=").append(prefs().getString("pad.CURSORSPEED", "16"));
-        return sb.toString();
-    }
-
-    private void padSettings() {
-        int n = PAD_BUTTONS.length;
-        String[] items = new String[n + 4];
-        for (int i = 0; i < n; i++)
-            items[i] = PAD_BUTTONS[i][1] + "  →  " + label(PAD_ACTIONS, padValue(i));
-        items[n] = "왼쪽 스틱  →  " + label(STICK_MODES, prefs().getString("pad.LEFTANALOG", "CURSOR"));
-        items[n + 1] = "오른쪽 스틱  →  " + label(STICK_MODES, prefs().getString("pad.RIGHTANALOG", "DPAD"));
-        items[n + 2] = "커서 속도  →  " + prefs().getString("pad.CURSORSPEED", "16");
-        items[n + 3] = "기본값으로 되돌리기";
         new AlertDialog.Builder(this)
-                .setTitle("게임패드 버튼 설정")
-                .setItems(items, (d, which) -> {
-                    if (which < n) {
-                        chooseAction(which);
-                    } else if (which == n || which == n + 1) {
-                        chooseStick(which == n ? "pad.LEFTANALOG" : "pad.RIGHTANALOG");
-                    } else if (which == n + 2) {
-                        chooseSpeed();
+                .setTitle(GAMES[game][1] + " 배경화면")
+                .setItems(new String[] { "다른 그림으로 바꾸기", "배경화면 없애기" }, (d, which) -> {
+                    if (which == 0) {
+                        pickImage(game);
                     } else {
-                        SharedPreferences.Editor e = prefs().edit();
-                        for (String k : prefs().getAll().keySet()) {
-                            if (k.startsWith("pad."))
-                                e.remove(k);
-                        }
-                        e.apply();
-                        padSettings();
+                        Settings.clearBackground(this, id);
+                        adapter.notifyDataSetChanged();
                     }
                 })
-                .setNegativeButton("닫기", null)
                 .show();
     }
 
-    private void chooseAction(int button) {
-        String[] labels = new String[PAD_ACTIONS.length];
-        for (int i = 0; i < labels.length; i++)
-            labels[i] = PAD_ACTIONS[i][1];
-        new AlertDialog.Builder(this)
-                .setTitle(PAD_BUTTONS[button][1] + " 버튼")
-                .setItems(labels, (d, which) -> {
-                    prefs().edit().putString("pad." + PAD_BUTTONS[button][0], PAD_ACTIONS[which][0]).apply();
-                    padSettings();
-                })
-                .show();
-    }
-
-    private void chooseStick(String key) {
-        String[] labels = new String[STICK_MODES.length];
-        for (int i = 0; i < labels.length; i++)
-            labels[i] = STICK_MODES[i][1];
-        new AlertDialog.Builder(this)
-                .setItems(labels, (d, which) -> {
-                    prefs().edit().putString(key, STICK_MODES[which][0]).apply();
-                    padSettings();
-                })
-                .show();
-    }
-
-    private void chooseSpeed() {
-        String[] speeds = { "8", "12", "16", "24", "32" };
-        new AlertDialog.Builder(this)
-                .setTitle("커서 속도")
-                .setItems(speeds, (d, which) -> {
-                    prefs().edit().putString("pad.CURSORSPEED", speeds[which]).apply();
-                    padSettings();
-                })
-                .show();
+    private void pickImage(int game) {
+        pickingFor = game;
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("image/*");
+        try {
+            startActivityForResult(i, REQ_IMAGE);
+        } catch (Exception e) {
+            status("그림을 고를 수 있는 앱이 없습니다.");
+        }
     }
 }
