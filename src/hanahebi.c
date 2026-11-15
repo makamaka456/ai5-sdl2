@@ -47,6 +47,27 @@
 #include "cursor.h"
 #include "vm_private.h"
 
+/*
+ * Load a CG as a private copy. asset_cg_load() returns a CG shared with the
+ * CG cache, which must not be modified (we shift positions and edit alpha).
+ */
+static struct cg *hh_cg_load(const char *name)
+{
+	struct cg *shared = asset_cg_load(name);
+	if (!shared)
+		return NULL;
+	struct cg *cg;
+	if (shared->palette) {
+		cg = shared; // indexed CGs are not modified
+		return cg;
+	}
+	cg = cg_alloc_direct(shared->metrics.w, shared->metrics.h);
+	cg->metrics = shared->metrics;
+	memcpy(cg->pixels, shared->pixels, shared->metrics.w * shared->metrics.h * 4);
+	cg_free(shared);
+	return cg;
+}
+
 // mem16 layout (from HH2D.exe)
 #define MES_NAME_SIZE 0x80
 #define VAR4_SIZE     0x2000
@@ -153,7 +174,7 @@ static struct cg *char_load_cg(const char *name, unsigned slot)
 		WARNING("Invalid character slot: %u", slot);
 		return NULL;
 	}
-	struct cg *cg = asset_cg_load(name);
+	struct cg *cg = hh_cg_load(name);
 	if (!cg) {
 		WARNING("Failed to load character CG \"%s\"", name);
 		return NULL;
@@ -1145,7 +1166,9 @@ static void hanahebi_present(struct param_list *params)
 static void hanahebi_load_image(struct param_list *params)
 {
 	const char *name = vm_string_param(params, 0);
-	struct cg *cg = asset_cg_load(name);
+	if (getenv("HH_DEBUG_UTIL"))
+		NOTICE("load_image(\"%s\") -> %u", name, mem_get_sysvar16(mes_sysvar16_dst_surface));
+	struct cg *cg = hh_cg_load(name);
 	if (!cg) {
 		WARNING("Failed to load CG \"%s\"", name);
 		return;
