@@ -1556,8 +1556,66 @@ static const char *item_names[8] = { "애널 드릴", "토란 줄기", "바이�
 	"청죽", "양초", "이뇨제", "관장기" };
 static const char *item_grades[3] = { "2급", "1급", "특급" };
 
+/*
+ * Tools owned (our own record: where HH2D.exe keeps them was not found).
+ * Bit g of item_owned[t] = tool t of grade g. Saved next to the save slot as
+ * SAVEHANAHEBI/ITEM%03u.dat; cleared at the title screen.
+ */
+static uint8_t item_owned[8];
+static const char *save_path(const char *fmt, unsigned no);
+
+static void items_write(unsigned no)
+{
+	FILE *f = file_open_utf8(save_path("ITEM%03u.dat", no), "wb");
+	if (f) {
+		fwrite(item_owned, sizeof(item_owned), 1, f);
+		fclose(f);
+	}
+}
+
+static void items_read(unsigned no)
+{
+	memset(item_owned, 0, sizeof(item_owned));
+	FILE *f = file_open_utf8(save_path("ITEM%03u.dat", no), "rb");
+	if (f) {
+		if (fread(item_owned, 1, sizeof(item_owned), f) != sizeof(item_owned))
+			memset(item_owned, 0, sizeof(item_owned));
+		fclose(f);
+	}
+}
+
+/*
+ * Util 8000(0, person, again): choose a tool for training. var32[8] =
+ * tool * 3 + grade + 1, 513 = choose another person, 514 = end training,
+ * 515 = right click (system menu; the script calls again with again = 1).
+ */
+static void util_item_select(void)
+{
+	const char *items[8 * 3 + 2];
+	int codes[8 * 3 + 2];
+	char labels[8 * 3][48];
+	unsigned n = 0;
+	for (unsigned t = 0; t < 8; t++) {
+		for (int g = 2; g >= 0; g--) {
+			if (!(item_owned[t] & (1 << g)))
+				continue;
+			snprintf(labels[n], sizeof(labels[n]), "%s (%s)", item_names[t], item_grades[g]);
+			items[n] = labels[n];
+			codes[n++] = t * 3 + g + 1;
+		}
+	}
+	items[n] = "다른 상대 고르기";
+	codes[n++] = 513;
+	items[n] = "조교 끝내기";
+	codes[n++] = 514;
+	int r = choice_run(items, n);
+	mem_set_var32(8, r < 0 ? 515 : codes[r]);
+}
+
 static void util_item_get(unsigned tool, unsigned grade)
 {
+	if (tool < 8 && grade < 3)
+		item_owned[tool] |= 1 << grade;
 	struct cg *cg = hh_cg_load("item_get.gcc");
 	SDL_Surface *ov = gfx_get_overlay(2);
 	SDL_CALL(SDL_FillRect, ov, NULL, SDL_MapRGBA(ov->format, 0, 0, 0, 120));
@@ -1610,6 +1668,225 @@ static void util_item_get(unsigned tool, unsigned grade)
 	input_wait_until_up(INPUT_CANCEL);
 	gfx_overlay_disable(2);
 	gfx_screen_dirty();
+}
+
+/*
+ * Util 61: choose who to train (HH2D.exe 0x42c690). var32[9] = 0 Shizuko,
+ * 1 Keiko, 2 Kyoko, 3 Mitsuko, 4 Chako; 0xffff = [end training];
+ * 5 = right click (the script opens the system menu and asks again).
+ * Who is shown depends on story flags (bytes of the memory):
+ *   0x516 == 1                       -> c_sel4.gcc: 0, 1, 2, 3
+ *   else 0x4f0, 0x4f9, 0x4f4 == 1 and (0x553 == 1 or 0x526 == 1)
+ *                                    -> c_sel3.gcc: 4, 2, 3
+ *   else 0x4f0, 0x4f9, 0x4f4 == 1    -> c_sel2.gcc: 4, 2
+ *   else 0x553 == 1                  -> c_sel2b.gcc: 4, 3
+ *   else                             -> c_sel2.gcc (first figure): 4
+ * A person can't be chosen when (a == 1 && b == 0) for one of her flag pairs.
+ */
+struct csel_person { unsigned char a1, b1, a2, b2; };
+static const struct csel_person csel_flags[5] = {
+	{ 0x61, 0xb7, 0x00, 0x00 }, // Shizuko (0x661/0x6b7)
+	{ 0x62, 0xb8, 0x63, 0xb9 },
+	{ 0x64, 0xba, 0x65, 0xbb },
+	{ 0x66, 0xbc, 0x67, 0xbd },
+	{ 0x00, 0x00, 0x00, 0x00 }, // Chako: always
+};
+
+static bool csel_enabled(unsigned who)
+{
+	const struct csel_person *f = &csel_flags[who];
+	if (f->a1 && memory_raw[0x600 + f->a1] == 1 && memory_raw[0x600 + f->b1] == 0)
+		return false;
+	if (f->a2 && memory_raw[0x600 + f->a2] == 1 && memory_raw[0x600 + f->b2] == 0)
+		return false;
+	return true;
+}
+
+#define CSEL_BTN_X 523
+#define CSEL_BTN_Y 431
+#define CSEL_BTN_W 100
+#define CSEL_BTN_H 34
+
+static void util_choose_person(void)
+{
+	static const char *names[5] = { "시즈코", "케이코", "쿄코", "미츠코", "체코" };
+	// debugging: HH_DEBUG_POKE="0x516:1,..." sets memory bytes first
+	const char *poke = getenv("HH_DEBUG_POKE");
+	if (poke) {
+		char *buf = xstrdup(poke);
+		for (char *t = strtok(buf, ","); t; t = strtok(NULL, ",")) {
+			unsigned long a = strtoul(t, NULL, 0);
+			char *c = strchr(t, ':');
+			if (c && a < sizeof(struct memory))
+				memory_raw[a] = strtoul(c + 1, NULL, 0);
+		}
+		free(buf);
+	}
+	const char *sheet;
+	unsigned who[4], n;
+	const uint8_t *m = memory_raw;
+	bool three_ok = m[0x4f0] == 1 && m[0x4f9] == 1 && m[0x4f4] == 1;
+	if (m[0x516] == 1) {
+		sheet = "c_sel4.gcc"; n = 4;
+		who[0] = 0; who[1] = 1; who[2] = 2; who[3] = 3;
+	} else if (three_ok && (m[0x553] == 1 || m[0x526] == 1)) {
+		sheet = "c_sel3.gcc"; n = 3;
+		who[0] = 4; who[1] = 2; who[2] = 3;
+	} else if (three_ok) {
+		sheet = "c_sel2.gcc"; n = 2;
+		who[0] = 4; who[1] = 2;
+	} else if (m[0x553] == 1) {
+		sheet = "c_sel2b.gcc"; n = 2;
+		who[0] = 4; who[1] = 3;
+	} else {
+		sheet = "c_sel2.gcc"; n = 1;
+		who[0] = 4;
+	}
+
+	// cut the figures out of the sheet (separated by transparent columns)
+	struct cg *cg = hh_cg_load(sheet);
+	SDL_Surface *fig[4] = {0};
+	int fy = 0;
+	if (cg && !cg->palette && cg->metrics.bpp != 8) {
+		int w = cg->metrics.w, h = cg->metrics.h;
+		fy = cg->metrics.y;
+		unsigned k = 0;
+		int start = -1;
+		for (int x = 0; x <= w && k < n; x++) {
+			bool opaque = false;
+			if (x < w) {
+				for (int y = 0; y < h; y += 3) {
+					if (cg->pixels[(y * w + x) * 4 + 3]) {
+						opaque = true;
+						break;
+					}
+				}
+			}
+			if (opaque && start < 0)
+				start = x;
+			if (!opaque && start >= 0) {
+				if (x - start > 40) {
+					fig[k] = SDL_CreateRGBSurfaceWithFormat(0, x - start, h, 32, SDL_PIXELFORMAT_RGBA32);
+					for (int y = 0; y < h; y++)
+						memcpy((uint8_t*)fig[k]->pixels + y * fig[k]->pitch,
+								cg->pixels + (y * w + start) * 4, (x - start) * 4);
+					SDL_SetSurfaceBlendMode(fig[k], SDL_BLENDMODE_BLEND);
+					k++;
+				}
+				start = -1;
+			}
+		}
+	}
+	if (cg)
+		cg_free(cg);
+
+	// spread the figures over the screen (they overlap like in the original)
+	int fx[4], total = 0;
+	for (unsigned i = 0; i < n; i++)
+		total += fig[i] ? fig[i]->w : 200;
+	int overlap = n > 1 ? max(0, (total - 600) / (int)(n - 1)) : 0;
+	int x = n == 1 ? (640 - (fig[0] ? fig[0]->w : 200)) / 2 : 20 - (total - (n - 1) * overlap > 600 ? 0 : 0);
+	if (n > 1)
+		x = (640 - (total - (int)(n - 1) * overlap)) / 2;
+	for (unsigned i = 0; i < n; i++) {
+		fx[i] = x;
+		x += (fig[i] ? fig[i]->w : 200) - overlap;
+	}
+
+	int hover = -2, last = -3, result = -1;
+	input_wait_until_up(INPUT_ACTIVATE);
+	input_wait_until_up(INPUT_CANCEL);
+	while (result < 0) {
+		unsigned cx, cy;
+		cursor_get_pos(&cx, &cy);
+		// hit test: the button, then the figures front to back
+		hover = -1;
+		if ((int)cx >= CSEL_BTN_X && (int)cx < CSEL_BTN_X + CSEL_BTN_W
+				&& (int)cy >= CSEL_BTN_Y && (int)cy < CSEL_BTN_Y + CSEL_BTN_H) {
+			hover = 100;
+		} else {
+			for (unsigned i = 0; i < n; i++) {
+				int w = fig[i] ? fig[i]->w : 200;
+				if ((int)cx >= fx[i] + 10 && (int)cx < fx[i] + w - 10 && (int)cy >= 40
+						&& csel_enabled(who[i])) {
+					// the figure on the left is in front
+					hover = i;
+					break;
+				}
+			}
+		}
+		if (hover != last) {
+			last = hover;
+			SDL_Surface *ov = gfx_get_overlay(2);
+			SDL_CALL(SDL_FillRect, ov, NULL, SDL_MapRGBA(ov->format, 0, 0, 0, 0));
+			// back to front: right to left, the hovered one last
+			for (int i = n - 1; i >= 0; i--) {
+				if (i == hover || !fig[i])
+					continue;
+				SDL_Rect d = { fx[i], 26 + fy - 26, fig[i]->w, fig[i]->h };
+				d.y = 480 - fig[i]->h;
+				Uint8 c = csel_enabled(who[i]) ? (hover >= 0 && hover < 100 ? 150 : 220) : 70;
+				SDL_SetSurfaceColorMod(fig[i], c, c, c);
+				SDL_BlitSurface(fig[i], NULL, ov, &d);
+			}
+			if (hover >= 0 && hover < 100 && fig[hover]) {
+				SDL_Rect d = { fx[hover], 480 - fig[hover]->h, fig[hover]->w, fig[hover]->h };
+				SDL_SetSurfaceColorMod(fig[hover], 255, 255, 255);
+				SDL_BlitSurface(fig[hover], NULL, ov, &d);
+			}
+			gfx_fill(0, 0, 640, 480, WORK_SURFACE, 0);
+			gfx_text_set_colors(0, 0xffffff);
+			gfx_text_set_size(20, 0);
+			SDL_Rect bar = { 0, 6, 640, 34 };
+			SDL_CALL(SDL_FillRect, ov, &bar, SDL_MapRGBA(ov->format, 60, 0, 0, 200));
+			const char *title = "조교할 상대를 고르세요";
+			if (hover >= 0 && hover < 100)
+				title = names[who[hover]];
+			work_text((640 - (int)text_width(title)) / 2, 12, title);
+			SDL_Rect b = { CSEL_BTN_X, CSEL_BTN_Y, CSEL_BTN_W, CSEL_BTN_H };
+			SDL_Rect in = { b.x + 2, b.y + 2, b.w - 4, b.h - 4 };
+			SDL_CALL(SDL_FillRect, ov, &b, SDL_MapRGBA(ov->format, hover == 100 ? 240 : 170, 40, 40, 240));
+			SDL_CALL(SDL_FillRect, ov, &in, SDL_MapRGBA(ov->format, hover == 100 ? 120 : 40, 10, 10, 230));
+			gfx_text_set_size(16, 0);
+			work_text(b.x + (b.w - (int)text_width("조교 끝내기")) / 2, b.y + 9, "조교 끝내기");
+			SDL_Surface *ts = gfx_get_surface(WORK_SURFACE);
+			SDL_CALL(SDL_SetColorKey, ts, SDL_TRUE, SDL_MapRGB(ts->format, 0, 0, 0));
+			SDL_CALL(SDL_BlitSurface, ts, &bar, ov, &bar);
+			SDL_CALL(SDL_BlitSurface, ts, &b, ov, &b);
+			SDL_CALL(SDL_SetColorKey, ts, SDL_FALSE, 0);
+			gfx_overlay_enable(2);
+			gfx_screen_dirty();
+		}
+		if (input_down(INPUT_CANCEL)) {
+			input_wait_until_up(INPUT_CANCEL);
+			result = 5;
+		} else if (input_down(INPUT_ACTIVATE)) {
+			input_wait_until_up(INPUT_ACTIVATE);
+			last = -3; // recompute at the release position
+			cursor_get_pos(&cx, &cy);
+			if ((int)cx >= CSEL_BTN_X && (int)cx < CSEL_BTN_X + CSEL_BTN_W
+					&& (int)cy >= CSEL_BTN_Y && (int)cy < CSEL_BTN_Y + CSEL_BTN_H) {
+				result = 0xffff;
+			} else {
+				for (unsigned i = 0; i < n; i++) {
+					int w = fig[i] ? fig[i]->w : 200;
+					if ((int)cx >= fx[i] + 10 && (int)cx < fx[i] + w - 10 && (int)cy >= 40
+							&& csel_enabled(who[i])) {
+						result = who[i];
+						break;
+					}
+				}
+			}
+		}
+		vm_peek();
+		vm_delay(16);
+	}
+	for (unsigned i = 0; i < n; i++)
+		if (fig[i])
+			SDL_FreeSurface(fig[i]);
+	gfx_overlay_disable(2);
+	gfx_screen_dirty();
+	mem_set_var32(9, result);
 }
 
 static void hanahebi_util(struct param_list *params)
@@ -1819,9 +2096,14 @@ static void hanahebi_util(struct param_list *params)
 		}
 		// (80, 2): the original rebuilds its list from 0x2568; ours lives there
 		break;
+	case 61:
+		util_choose_person();
+		break;
 	case 8000:
 		if (param_or(params, 1, 0) == 1)
 			util_item_get(param_or(params, 2, 0), param_or(params, 3, 0));
+		else if (param_or(params, 1, 0) == 0)
+			util_item_select();
 		else
 			log_unimplemented("Util", 8000, params);
 		break;
@@ -2948,7 +3230,7 @@ static void hanahebi_savedata(struct param_list *params)
 	unsigned no = param_or(params, 1, 0);
 	unsigned start = param_or(params, 2, 0), count = param_or(params, 3, 0);
 	switch (param_or(params, 0, 0)) {
-	case 0: hh_resume_load(no); break;
+	case 0: hh_resume_load(no); items_read(no); break;
 	case 1: {
 		// tell the player when the save folder is not writable (e.g. Android
 		// without storage permission) instead of failing silently
@@ -2961,6 +3243,7 @@ static void hanahebi_savedata(struct param_list *params)
 		}
 		fclose(f);
 		savedata_write(flag_file(no), memory_raw, 0, ARGS_OFF);
+		items_write(no);
 		break;
 	}
 	case 2: // load var4
@@ -3578,6 +3861,8 @@ static void title_parts_korean(SDL_Surface *parts)
 
 static void util_title_menu(unsigned menu)
 {
+	if (!getenv("HH_DEBUG_ITEM"))
+		memset(item_owned, 0, sizeof(item_owned));
 	struct cg *cg = hh_cg_load("title_p.gcc");
 	if (!cg) {
 		mem_set_var16(18, 0);
