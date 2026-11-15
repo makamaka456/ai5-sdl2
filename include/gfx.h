@@ -31,6 +31,9 @@ extern struct gfx_view gfx_view;
 void gfx_init(const char *name);
 void gfx_set_icon(void);
 void gfx_update(void);
+// offset of the displayed screen (screen shake effects)
+extern int gfx_display_offset_x;
+extern int gfx_display_offset_y;
 void gfx_dirty(unsigned surface, int x, int y, int w, int h);
 void gfx_screen_dirty(void);
 void gfx_whole_surface_dirty(unsigned surface);

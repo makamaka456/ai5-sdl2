@@ -399,10 +399,19 @@ void gfx_update(void)
 		SDL_CALL(SDL_UpdateTexture, gfx.texture, &dst_r, p, gfx.display->pitch);
 	}
 	SDL_CALL(SDL_RenderClear, gfx.renderer);
-	SDL_CALL(SDL_RenderCopy, gfx.renderer, gfx.texture, NULL, NULL);
+	if (gfx_display_offset_x || gfx_display_offset_y) {
+		// screen shake
+		SDL_Rect dst = { gfx_display_offset_x, gfx_display_offset_y, gfx_view.w, gfx_view.h };
+		SDL_CALL(SDL_RenderCopy, gfx.renderer, gfx.texture, NULL, &dst);
+	} else {
+		SDL_CALL(SDL_RenderCopy, gfx.renderer, gfx.texture, NULL, NULL);
+	}
 	SDL_RenderPresent(gfx.renderer);
 	gfx_clean(gfx.screen);
 }
+
+int gfx_display_offset_x = 0;
+int gfx_display_offset_y = 0;
 
 void gfx_display_freeze(void)
 {

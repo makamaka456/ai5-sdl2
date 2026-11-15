@@ -829,6 +829,32 @@ static void hanahebi_util(struct param_list *params)
 		mem_set_var16(5, speed[i < 4 ? i : 1]);
 		break;
 	}
+	case 0: // screen offset (0, x, y): used for shaking
+		gfx_display_offset_x = (int32_t)param_or(params, 1, 0);
+		gfx_display_offset_y = (int32_t)param_or(params, 2, 0);
+		gfx_screen_dirty();
+		gfx_update();
+		break;
+	case 2: { // var4[from..to) = value
+		unsigned from = param_or(params, 1, 0), to = param_or(params, 2, 0);
+		uint8_t v = param_or(params, 3, 0);
+		for (unsigned i = from; i < to && i < VAR4_SIZE; i++)
+			memory_raw[VAR4_OFF + i] = v;
+		break;
+	}
+	case 3: // var32[25] = time (ms)
+		mem_set_var32(25, SDL_GetTicks());
+		break;
+	case 4: { // wait until (4, start, ms) has passed (skippable)
+		uint32_t start = param_or(params, 1, 0), ms = param_or(params, 2, 0);
+		while (SDL_GetTicks() - start < ms) {
+			if (input_down(INPUT_CTRL))
+				break;
+			vm_peek();
+			vm_delay(8);
+		}
+		break;
+	}
 	case 5:
 		util_system_menu();
 		break;
