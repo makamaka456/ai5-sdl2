@@ -248,8 +248,10 @@ static void util_characters(struct param_list *params)
 	case 11: // redraw
 		char_present(false);
 		break;
-	case 18: { // change expression (18, _, name, slot)
+	case 18: { // change expression (18, _, name, slot); only for Util 50 sprites
 		unsigned slot = param_or(params, 4, 0);
+		if (slot >= NR_CHAR_SLOTS || !char_cg[slot])
+			break;
 		struct cg *face = char_load_cg(vm_string_param(params, 3), slot);
 		if (face) {
 			char_unload_face(slot);
@@ -266,29 +268,64 @@ static void util_characters(struct param_list *params)
 }
 
 /*
- * Util 51: draw a character sprite directly onto the background (surface 1).
- *   (0, name, slot), (1, name, slot), (3/4) clear
+ * Util 51: character sprites drawn onto the background (surface 1).
+ *   (0/1, name, slot)  set sprite of slot and draw it
+ *   (2, slot)          remove sprite; surface 1 is rebuilt from the clean
+ *                      background in surface 2 plus the remaining sprites
+ *   (3/4)              forget all sprites (no redraw)
  * The drawn rectangle is returned in var16[23..26].
  */
+static struct cg *direct_cg[NR_CHAR_SLOTS];
+
+static void direct_redraw(void)
+{
+	gfx_copy(0, 0, 640, 480, 2, 0, 0, 1);
+	for (unsigned i = 0; i < NR_CHAR_SLOTS; i++) {
+		if (direct_cg[i])
+			gfx_draw_cg(1, direct_cg[i]);
+	}
+}
+
 static void util_characters_direct(struct param_list *params)
 {
 	switch (param_or(params, 1, 0)) {
 	case 0:
 	case 1: {
-		struct cg *cg = char_load_cg(vm_string_param(params, 2), param_or(params, 3, 0));
+		unsigned slot = param_or(params, 3, 0);
+		struct cg *cg = char_load_cg(vm_string_param(params, 2), slot);
 		if (!cg)
 			break;
-		gfx_draw_cg(1, cg);
+		if (direct_cg[slot]) {
+			cg_free(direct_cg[slot]);
+			direct_cg[slot] = cg;
+			direct_redraw();
+		} else {
+			direct_cg[slot] = cg;
+			gfx_draw_cg(1, cg);
+		}
 		mem_set_var16(23, cg->metrics.x);
 		mem_set_var16(24, cg->metrics.y);
 		mem_set_var16(25, cg->metrics.x + cg->metrics.w);
 		mem_set_var16(26, cg->metrics.y + cg->metrics.h);
-		cg_free(cg);
 		break;
 	}
-	case 2:
+	case 2: {
+		unsigned slot = param_or(params, 2, 0);
+		if (slot < NR_CHAR_SLOTS && direct_cg[slot]) {
+			cg_free(direct_cg[slot]);
+			direct_cg[slot] = NULL;
+			direct_redraw();
+		}
+		break;
+	}
 	case 3:
 	case 4:
+		for (unsigned i = 0; i < NR_CHAR_SLOTS; i++) {
+			if (direct_cg[i]) {
+				cg_free(direct_cg[i]);
+				direct_cg[i] = NULL;
+			}
+		}
 		break;
 	default:
 		log_unimplemented("Util", 51, params);
@@ -567,6 +604,17 @@ static void util_choice(void)
 
 static void hanahebi_util(struct param_list *params)
 {
+	if (getenv("HH_DEBUG_UTIL")) {
+		string str = string_new("");
+		for (unsigned i = 0; i < params->nr_params; i++) {
+			if (params->params[i].type == MES_PARAM_STRING)
+				str = string_concat_fmt(str, "%s\"%s\"", i ? "," : "", params->params[i].str);
+			else
+				str = string_concat_fmt(str, "%s%u", i ? "," : "", params->params[i].val);
+		}
+		NOTICE("Util(%s) [%s]", str, mem_mes_name());
+		string_free(str);
+	}
 	if (vm_expr_param(params, 0) == 2000) {
 		util_choice();
 		return;
