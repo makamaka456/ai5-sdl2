@@ -1499,10 +1499,12 @@ static void util_map_select(void)
 	static bool start_used = false;
 	const char *st = getenv("HH_MAP_START");
 	if (st && !start_used) {
-		unsigned n, d;
-		if (sscanf(st, "%u,%u", &n, &d) == 2) {
+		unsigned n, d, f = map.floor;
+		if (sscanf(st, "%u,%u,%u", &n, &d, &f) >= 2) {
 			map.node = n % MAP_MAX_NODES;
 			map.dir = d & 3;
+			map.floor = f ? 1 : 0;
+			map_load_graph(map.floor);
 		}
 		start_used = true;
 	}
