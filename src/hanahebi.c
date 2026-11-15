@@ -1913,7 +1913,7 @@ static const struct { const char *label, *section, *key; int min, max, def; } hh
 	{ "효과음 크기", "Effect", "Volume", 0, 9, 9 },
 	{ "음성 크기", "Voice", "Volume", 0, 9, 9 },
 	{ "음성", "Voice", "IsVoice", 0, 1, 1 },
-	{ "글자 속도", "MsgMode", "Speed", 0, 9, 5 },
+	{ "자동 진행 빠르기", "MsgMode", "Speed", 0, 9, 5 },
 	{ "자동 진행", "MsgMode", "AutoMes", 0, 1, 0 },
 	{ "화면 효과 속도", "DispEffect", "Play", 0, 3, 1 },
 };
