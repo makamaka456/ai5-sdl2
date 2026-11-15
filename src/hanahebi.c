@@ -1902,6 +1902,110 @@ static void util_choose_person(void)
 	mem_set_var32(9, result);
 }
 
+/*
+ * Settings (Util 10000 in HH2D.exe: its own options screen; on Android there
+ * is no config.exe). Values live in the INI settings; our changes are also
+ * kept in SAVEHANAHEBI/CONFIG.TXT ("Section.Key=value" lines) and applied at
+ * start.
+ */
+static const struct { const char *label, *section, *key; int min, max, def; } hh_opts[] = {
+	{ "음악 크기", "Music", "Volume", 0, 9, 9 },
+	{ "효과음 크기", "Effect", "Volume", 0, 9, 9 },
+	{ "음성 크기", "Voice", "Volume", 0, 9, 9 },
+	{ "음성", "Voice", "IsVoice", 0, 1, 1 },
+	{ "글자 속도", "MsgMode", "Speed", 0, 9, 5 },
+	{ "자동 진행", "MsgMode", "AutoMes", 0, 1, 0 },
+	{ "화면 효과 속도", "DispEffect", "Play", 0, 3, 1 },
+};
+
+static int hh_opt_get(unsigned i)
+{
+	const char *v = config_ini_get(hh_opts[i].section, hh_opts[i].key);
+	return v ? atoi(v) : hh_opts[i].def;
+}
+
+static void hh_config_save(void)
+{
+	FILE *f = file_open_utf8(save_path("CONFIG.TXT", 0), "wb");
+	if (!f)
+		return;
+	for (unsigned i = 0; i < ARRAY_SIZE(hh_opts); i++)
+		fprintf(f, "%s.%s=%d\n", hh_opts[i].section, hh_opts[i].key, hh_opt_get(i));
+	fclose(f);
+}
+
+static void hh_config_load(void)
+{
+	FILE *f = file_open_utf8(save_path("CONFIG.TXT", 0), "rb");
+	if (!f)
+		return;
+	char line[128];
+	while (fgets(line, sizeof(line), f)) {
+		char *dot = strchr(line, '.'), *eq = strchr(line, '=');
+		if (!dot || !eq || eq < dot)
+			continue;
+		*dot = '\0';
+		*eq = '\0';
+		char *val = eq + 1;
+		val[strcspn(val, "\r\n")] = '\0';
+		config_ini_set(line, dot + 1, val);
+	}
+	fclose(f);
+}
+
+static void util_config(void)
+{
+	while (true) {
+		char labels[ARRAY_SIZE(hh_opts)][64];
+		const char *items[ARRAY_SIZE(hh_opts) + 1];
+		for (unsigned i = 0; i < ARRAY_SIZE(hh_opts); i++) {
+			int v = hh_opt_get(i);
+			if (hh_opts[i].max == 1)
+				snprintf(labels[i], sizeof(labels[i]), "%s: %s", hh_opts[i].label, v ? "켜기" : "끄기");
+			else
+				snprintf(labels[i], sizeof(labels[i]), "%s: %d", hh_opts[i].label, v);
+			items[i] = labels[i];
+		}
+		items[ARRAY_SIZE(hh_opts)] = "돌아가기";
+		int r = choice_run(items, ARRAY_SIZE(hh_opts) + 1);
+		if (r < 0 || r >= (int)ARRAY_SIZE(hh_opts))
+			break;
+		// toggles flip; numbers go down by one and wrap around to the maximum
+		int v = hh_opts[r].max == 1 ? !hh_opt_get(r) : hh_opt_get(r) - 1;
+		if (v < hh_opts[r].min)
+			v = hh_opts[r].max;
+		char buf[8];
+		snprintf(buf, sizeof(buf), "%d", v);
+		config_ini_set(hh_opts[r].section, hh_opts[r].key, buf);
+		apply_volume(AUDIO_CH_BGM, "Music");
+		apply_volume(AUDIO_CH_VOICE0, "Voice");
+		for (unsigned k = 0; k < 3; k++)
+			apply_volume(AUDIO_CH_SE(k), "Effect");
+		hh_config_save();
+	}
+}
+
+// (8000, 2): the tools we have (display only)
+static void util_item_list(void)
+{
+	const char *items[8 * 3 + 1];
+	char labels[8 * 3][48];
+	unsigned n = 0;
+	for (unsigned t = 0; t < 8; t++) {
+		for (int g = 2; g >= 0; g--) {
+			if (!(item_owned[t] & (1 << g)))
+				continue;
+			snprintf(labels[n], sizeof(labels[n]), "%s (%s)", item_names[t], item_grades[g]);
+			items[n] = labels[n];
+			n++;
+		}
+	}
+	if (!n)
+		items[n++] = "가진 도구가 없습니다";
+	items[n++] = "돌아가기";
+	choice_run(items, n);
+}
+
 static void hanahebi_util(struct param_list *params)
 {
 	if (getenv("HH_DEBUG_UTIL") && vm_expr_param(params, 0) != 9000 && vm_expr_param(params, 0) != 504) {
@@ -2125,11 +2229,16 @@ static void hanahebi_util(struct param_list *params)
 	case 61:
 		util_choose_person();
 		break;
+	case 10000:
+		util_config();
+		break;
 	case 8000:
 		if (param_or(params, 1, 0) == 1)
 			util_item_get(param_or(params, 2, 0), param_or(params, 3, 0));
 		else if (param_or(params, 1, 0) == 0)
 			util_item_select();
+		else if (param_or(params, 1, 0) == 2)
+			util_item_list();
 		else
 			log_unimplemented("Util", 8000, params);
 		break;
@@ -3698,6 +3807,8 @@ static void util_system_menu(void)
 		{ "불러오기", 2 },
 		{ "지난 대사 보기", 4 },
 		{ "메시지창 숨기기", 5 },
+		{ "가진 도구 보기", 6 },
+		{ "환경 설정", 8 },
 		{ "타이틀로 돌아가기", 9 },
 		{ "게임 종료", 10 },
 		{ "돌아가기", 11 },
@@ -4741,6 +4852,8 @@ static void hanahebi_init(void)
 	// text is drawn on a black (transparent) background and shown over a
 	// dark box, so antialiased edges look fine
 	text_antialias = true;
+	// our settings screen (Util 10000) keeps its values here
+	hh_config_load();
 }
 
 struct game game_hanahebi = {
