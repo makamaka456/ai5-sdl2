@@ -144,6 +144,12 @@ SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./build/ai5 <게임폴더>
 - 고정 다운로드 주소: 브랜치에 푸시하면 Releases의 `android-latest`(사전 출시)에 `ai5-launcher.apk`가 올라감 → https://github.com/makamaka456/ai5-sdl2/releases/tag/android-latest
 - APK는 GitHub Actions `Android` 워크플로(`.github/workflows/android.yaml`) 산출물 `ai5-launcher-apk` (작업 공간에서는 dl.google.com이 막혀 직접 빌드 불가)
 
+## 다른 게임 지원 때 검토할 것 (꽃과뱀 마무리 후, 2026-11-15 사용자 요청)
+- 게임 파일: 비공개 저장소 릴리즈 `games-Doukyuusei_2`(동급생2), `Shusaku`(취작) 업로드됨
+- **유작(isaku98) 안드로이드 실행 오류** (사용자 폰 스크린샷): `src/isaku/item_window.c:51 item_window_create: SDL_CreateWindow: Android only supports one window`
+  - 원인: 유작의 아이템 창을 PC에서는 별도 창으로 만드는데 안드로이드는 창을 하나만 허용
+  - 고칠 방향: 안드로이드에서는 아이템 창을 본 창 안의 덮개(오버레이)로 그리기. 같은 방식으로 다른 게임의 추가 창(SDL_CreateWindow)도 모두 찾아 점검
+
 ## 꽃과뱀 키 분석 (2026-11-15)
 - 대본은 `System.function[18](키번호, 1)`로 키를 확인(결과 var32[18]). HH2D.exe 0x415210 키표(DirectInput):
   0 Enter/왼쪽 클릭, 1 ESC/오른쪽 클릭, 2~5 방향키, 6 Shift, 7 Ctrl, 8 Space, 9 Backspace, 10 PgUp, 11 PgDn, 12 Delete, 13~16 Z X C V, 17 Tab, 18 F11, 19 F12
