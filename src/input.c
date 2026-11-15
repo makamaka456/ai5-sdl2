@@ -56,6 +56,7 @@ static bool controller_rtrigger_mapped_explicitly = false;
 
 static uint32_t key_down_timestamp[INPUT_NR_INPUTS] = {0};
 static bool key_down[INPUT_NR_INPUTS] = {0};
+static bool two_finger_cancel = false;
 
 uint32_t cursor_swap_event = 0;
 
@@ -357,6 +358,22 @@ void handle_events(void)
 			if (e.button.windowID != gfx.window_id)
 				break;
 			mouse_event(&e.button, false);
+			break;
+		case SDL_FINGERDOWN:
+			// two-finger tap = right click: drop the left click that
+			// the first finger produced
+			if (SDL_GetNumTouchFingers(e.tfinger.touchId) >= 2) {
+				key_down[INPUT_ACTIVATE] = false;
+				key_down_timestamp[INPUT_ACTIVATE] = 0;
+				input_key_event(INPUT_CANCEL, true);
+				two_finger_cancel = true;
+			}
+			break;
+		case SDL_FINGERUP:
+			if (two_finger_cancel && SDL_GetNumTouchFingers(e.tfinger.touchId) <= 1) {
+				input_key_event(INPUT_CANCEL, false);
+				two_finger_cancel = false;
+			}
 			break;
 		case SDL_MOUSEWHEEL:
 			if (e.wheel.windowID != gfx.window_id)

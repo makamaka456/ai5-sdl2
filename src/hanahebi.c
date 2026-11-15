@@ -22,6 +22,7 @@
  * procedure arguments (arg[n]). Only the 2D mode (HH2D.exe) is targeted.
  */
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -152,6 +153,7 @@ static void msgwin_show(void);
 static void msgwin_hide(void);
 static void util_save_screen(unsigned mode);
 static void util_system_menu(void);
+static void apply_volume(enum audio_channel ch, const char *section);
 static void util_scroll(struct param_list *params);
 static void util_room(struct param_list *params);
 static void util_ending_mode(unsigned last_tab);
@@ -1396,6 +1398,7 @@ static void util_backlog_view(void)
 			if (hover >= 0 && bl_voice[hover][0]) {
 				audio_voice_stop(0);
 				audio_voice_play(bl_voice[hover], 0);
+				apply_volume(AUDIO_CH_VOICE0, "Voice");
 			}
 		}
 		vm_peek();
@@ -1591,12 +1594,30 @@ static bool setting_enabled(const char *section, const char *key)
 	return !v || atoi(v) != 0;
 }
 
+// AI5WIN.INI [<section>] Volume (0-9, 9 = full) -> channel volume (-5000..0)
+static void apply_volume(enum audio_channel ch, const char *section)
+{
+	const char *v = config_ini_get(section, "Volume");
+	int n = v ? atoi(v) : 9;
+	if (n >= 9) {
+		audio_set_volume(ch, AUDIO_VOLUME_MAX);
+		return;
+	}
+	if (n <= 0) {
+		audio_set_volume(ch, AUDIO_VOLUME_MIN);
+		return;
+	}
+	audio_set_volume(ch, (int)(2000.f * log10f(n / 9.f)));
+}
+
 static void hanahebi_bgm(struct param_list *params)
 {
 	switch (vm_expr_param(params, 0)) {
 	case 0:
-		if (setting_enabled("Music", "IsMusic"))
+		if (setting_enabled("Music", "IsMusic")) {
 			audio_bgm_play(vm_string_param(params, 1), false);
+			apply_volume(AUDIO_CH_BGM, "Music");
+		}
 		break;
 	case 1:
 		audio_stop(AUDIO_CH_BGM);
@@ -1608,8 +1629,10 @@ static void hanahebi_bgm(struct param_list *params)
 		strncpy(bgm_queued, vm_string_param(params, 1), sizeof(bgm_queued) - 1);
 		break;
 	case 4:
-		if (bgm_queued[0] && setting_enabled("Music", "IsMusic"))
+		if (bgm_queued[0] && setting_enabled("Music", "IsMusic")) {
 			audio_bgm_play(bgm_queued, false);
+			apply_volume(AUDIO_CH_BGM, "Music");
+		}
 		break;
 	default:
 		log_unimplemented("System.function", 5, params);
@@ -1626,8 +1649,10 @@ static void hanahebi_se(struct param_list *params)
 {
 	switch (vm_expr_param(params, 0)) {
 	case 0:
-		if (setting_enabled("Se", "IsSe"))
+		if (setting_enabled("Se", "IsSe")) {
 			audio_se_play(vm_string_param(params, 1), se_channel(params, 2));
+			apply_volume(AUDIO_CH_SE(se_channel(params, 2)), "Effect");
+		}
 		break;
 	case 1:
 		audio_se_stop(se_channel(params, 1));
@@ -1648,8 +1673,10 @@ static void hanahebi_voice(struct param_list *params)
 	switch (vm_expr_param(params, 0)) {
 	case 0:
 		bl_set_voice(vm_string_param(params, 1));
-		if (setting_enabled("Voice", "IsVoice"))
+		if (setting_enabled("Voice", "IsVoice")) {
 			audio_voice_play(vm_string_param(params, 1), 0);
+			apply_volume(AUDIO_CH_VOICE0, "Voice");
+		}
 		break;
 	case 1:
 		audio_voice_stop(0);
@@ -1663,8 +1690,10 @@ static void hanahebi_voice(struct param_list *params)
 		if (voice_pending) {
 			bl_set_voice(voice_queued);
 			audio_voice_stop(0);
-			if (setting_enabled("Voice", "IsVoice"))
+			if (setting_enabled("Voice", "IsVoice")) {
 				audio_voice_play(voice_queued, 0);
+				apply_volume(AUDIO_CH_VOICE0, "Voice");
+			}
 		}
 		voice_pending = false;
 		break;
@@ -1916,7 +1945,20 @@ static void hanahebi_savedata(struct param_list *params)
 	unsigned start = param_or(params, 2, 0), count = param_or(params, 3, 0);
 	switch (param_or(params, 0, 0)) {
 	case 0: hh_resume_load(no); break;
-	case 1: savedata_write(flag_file(no), memory_raw, 0, ARGS_OFF); break;
+	case 1: {
+		// tell the player when the save folder is not writable (e.g. Android
+		// without storage permission) instead of failing silently
+		FILE *f = file_open_utf8(flag_file(no), "ab");
+		if (!f) {
+			SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "저장 실패",
+				"게임 폴더의 SAVEHANAHEBI 폴더에 쓸 수 없습니다.\n"
+				"저장소 권한(모든 파일 접근)을 확인하세요.", NULL);
+			break;
+		}
+		fclose(f);
+		savedata_write(flag_file(no), memory_raw, 0, ARGS_OFF);
+		break;
+	}
 	case 2: // load var4
 		savedata_read(flag_file(no), memory_raw, VAR4_OFF, VAR4_SIZE);
 		mem_set_var4(4013, 1);
