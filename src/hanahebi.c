@@ -1030,6 +1030,9 @@ static void hanahebi_init(void)
 {
 	// sound effects are in their own archive (se.arc)
 	asset_effect_is_bgm = false;
+	// text is drawn on a black (transparent) background and shown over a
+	// dark box, so antialiased edges look fine
+	text_antialias = true;
 }
 
 struct game game_hanahebi = {
