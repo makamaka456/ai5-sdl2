@@ -113,7 +113,6 @@ static void msgwin_hide(void);
 		log_unimplemented("System.function", n, params); \
 	}
 SYS_STUB(3) SYS_STUB(4)
-SYS_STUB(10)
 
 SYS_STUB(23) SYS_STUB(24) SYS_STUB(26) SYS_STUB(28)
 
@@ -123,8 +122,10 @@ SYS_STUB(23) SYS_STUB(24) SYS_STUB(26) SYS_STUB(28)
  * Sprites are 32-bit CGs with alpha, drawn over the background in surface 1.
  */
 #define NR_CHAR_SLOTS 3
-#define WORK_SURFACE  13
-#define FADE_SURFACE  14
+#define BACK_SURFACE  15
+#define PREV_SURFACE  16
+#define WORK_SURFACE  17
+#define FADE_SURFACE  18
 // each slot has a body sprite and an optional expression (face) sprite
 static struct cg *char_cg[NR_CHAR_SLOTS];
 static struct cg *char_face[NR_CHAR_SLOTS];
@@ -947,6 +948,24 @@ static void hanahebi_voice(struct param_list *params)
 	}
 }
 
+/*
+ * System.function[10](mode[, color, fill]): show the back buffer (surface 15)
+ * on the screen (HH2D.exe 0x450620). The previous screen is kept in 16.
+ *   mode 0: immediately, 1/2: crossfade. If fill is set, the back buffer is
+ *   first filled with color.
+ */
+static void hanahebi_present(struct param_list *params)
+{
+	unsigned mode = param_or(params, 0, 0);
+	if (param_or(params, 2, 0))
+		gfx_fill(0, 0, 640, 480, BACK_SURFACE, param_or(params, 1, 0));
+	gfx_copy(0, 0, 640, 480, 0, 0, 0, PREV_SURFACE);
+	if (mode == 0)
+		gfx_copy(0, 0, 640, 480, BACK_SURFACE, 0, 0, 0);
+	else
+		crossfade_to(BACK_SURFACE);
+}
+
 // System.function[9](name): load a GCC image into the destination surface
 /*
  * Our surfaces have no alpha channel. HH2D.exe keeps the alpha of 32-bit CGs
@@ -1024,6 +1043,17 @@ static void hanahebi_mem_init(void)
 	mem_set_sysvar16(mes_sysvar16_text_end_y, 480);
 	mem_set_sysvar32(mes_sysvar32_cg_offset, 0x20000);
 	hanahebi_mem_restore();
+
+	// HH2D.exe (2D version) initialization (0x40e600):
+	//   var4[4013] = 1 (2D mode), sysvar16[23] = 15 (back buffer surface),
+	//   flags |= 0x402 | 0x2000 (0x2000 unless [DispEffect] Play == 3)
+	mem_set_var4(4013, 1);
+	mem_set_sysvar16(23, BACK_SURFACE);
+	uint16_t flags = mem_get_sysvar16(mes_sysvar16_flags) | 0x402 | 0x2000;
+	const char *play = config_ini_get("DispEffect", "Play");
+	if (play && atoi(play) == 3)
+		flags &= ~0x2000;
+	mem_set_sysvar16(mes_sysvar16_flags, flags);
 }
 
 static void hanahebi_init(void)
@@ -1037,24 +1067,13 @@ static void hanahebi_init(void)
 
 struct game game_hanahebi = {
 	.id = GAME_HANAHEBI,
+	// 0 = screen, 15 = back buffer, 16 = previous screen (HH2D.exe);
+	// 17, 18 = our own work surfaces
 	.surface_sizes = {
-		{ 640, 480 },
-		{ 640, 480 },
-		{ 640, 480 },
-		{ 640, 480 },
-		{ 640, 480 },
-		{ 640, 480 },
-		{ 640, 480 },
-		{ 640, 480 },
-		{ 640, 480 },
-		{ 640, 480 },
-		{ 640, 480 },
-		{ 640, 480 },
-		{ 640, 480 },
-		{ 640, 480 },
-		{ 640, 480 },
-		{ 0, 0 }
+		[0 ... 18] = { 640, 480 },
+		[19] = { 0, 0 },
 	},
+
 	.bpp = 24,
 	.var4_size = VAR4_SIZE,
 	.mem16_size = MEM16_SIZE,
@@ -1115,7 +1134,7 @@ struct game game_hanahebi = {
 		[7]  = hanahebi_voice,
 		[8]  = hanahebi_load,
 		[9]  = hanahebi_load_image,
-		[10] = sys_stub_10,
+		[10] = hanahebi_present,
 		[11] = hanahebi_graphics,
 		[12] = hanahebi_wait,
 		[13] = hanahebi_set_colors,

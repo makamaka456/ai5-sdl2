@@ -22,7 +22,7 @@
 
 struct cg;
 
-#define GFX_NR_SURFACES 15
+#define GFX_NR_SURFACES 20
 #define GFX_NR_OVERLAYS 4
 
 struct gfx_view { unsigned w, h; };

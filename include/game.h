@@ -93,7 +93,7 @@ enum game_flag {
 struct game {
 	enum ai5_game_id id;
 	struct { unsigned w, h; } view;
-	struct { uint16_t w, h; } surface_sizes[16];
+	struct { uint16_t w, h; } surface_sizes[20]; // GFX_NR_SURFACES
 	// bits per pixel
 	//   8  = 8-bit indexed
 	//   16 = BGR555
