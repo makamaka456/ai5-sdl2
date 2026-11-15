@@ -951,8 +951,13 @@ static void isaku_init(void)
 	audio_set_volume(AUDIO_CH_VOICE0, -500);
 	map_controller_button_implicitly(SDL_CONTROLLER_BUTTON_BACK, INPUT_S);
 	map_controller_button_implicitly(SDL_CONTROLLER_BUTTON_START, INPUT_L);
+	// Android allows one window only: draw the item window inside the game screen
+#ifdef __ANDROID__
+	isaku_item_window_use_overlay();
+#else
 	if (config.controller.ui)
 		isaku_item_window_use_overlay();
+#endif
 }
 
 static void isaku_update(void)

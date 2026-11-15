@@ -1276,6 +1276,15 @@ static void util_map_select(void)
 	// the table is loaded by Util 1019 (not again after loading a save)
 	if (!map.have_itm)
 		map_load_itm(0);
+	// debugging (automatic play): HH_DEBUG_MAP_RANDOM=1 picks a random room
+	if (getenv("HH_DEBUG_MAP_RANDOM")) {
+		int r = rand() % (ARRAY_SIZE(map_rooms) + 2);
+		int room = r < (int)ARRAY_SIZE(map_rooms) ? (int)map_rooms[r].id
+			: map_nr_people ? (int)map_people[rand() % map_nr_people].id : 1;
+		NOTICE("map: random choice %d", room);
+		mem_set_var32(12, room);
+		return;
+	}
 	if (!map_load_graph(map.floor)) {
 		// no graph: fall back to the room list
 		int room = map_room_list();

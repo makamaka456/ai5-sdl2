@@ -151,6 +151,8 @@ SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./build/ai5 <게임폴더>
 - **유작(isaku98) 안드로이드 실행 오류** (사용자 폰 스크린샷): `src/isaku/item_window.c:51 item_window_create: SDL_CreateWindow: Android only supports one window`
   - 원인: 유작의 아이템 창을 PC에서는 별도 창으로 만드는데 안드로이드는 창을 하나만 허용
   - 고칠 방향: 안드로이드에서는 아이템 창을 본 창 안의 덮개(오버레이)로 그리기. 같은 방식으로 다른 게임의 추가 창(SDL_CreateWindow)도 모두 찾아 점검
+  - 1차 조치(2026-11-15 밤): 안드로이드면 유작 아이템 창을 원래 있던 덮개 방식(`isaku_item_window_use_overlay`, `--controller-ui`와 같음)으로 → 시작 오류는 없어질 것 (폰 확인 필요)
+  - 남은 추가 창: `popup_menu.c`(유작·취작 오른쪽 클릭 메뉴, 안드로이드에서 열면 같은 오류), 취작 `shuusaku/schedule.c`·`status.c`(일정표·상태 창). 화면 안 메뉴로 다시 그려야 함
 
 ## 꽃과뱀 키 분석 (2026-11-15)
 - 대본은 `System.function[18](키번호, 1)`로 키를 확인(결과 var32[18]). HH2D.exe 0x415210 키표(DirectInput):
