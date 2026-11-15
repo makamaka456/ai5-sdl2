@@ -152,6 +152,7 @@ static void msgwin_show(void);
 static void msgwin_hide(void);
 static void util_save_screen(unsigned mode);
 static void util_system_menu(void);
+static void util_room(struct param_list *params);
 static void util_ending_mode(unsigned last_tab);
 static void util_scene_mode(unsigned last_tab);
 static void util_cg_mode(void);
@@ -916,6 +917,9 @@ static void hanahebi_util(struct param_list *params)
 	}
 	case 5:
 		util_system_menu();
+		break;
+	case 64:
+		util_room(params);
 		break;
 	case 6: case 10: // system menu closed / redraw menu bar
 	case 1005: case 1006: // map: pause/resume (TODO)
@@ -2890,6 +2894,126 @@ static void util_ending_mode(unsigned last_tab)
 	replay_menu(6, ending_tabs, ending_counts, &ending_flags[0][0], 13, "엔딩", last_tab);
 }
 
+/*
+ * Util 64: investigating a room (HH2D.exe 0x41bd40, 0x41cb90, 0x41c900).
+ *   (64, "bga_NNN.bmp", "FASareaNN.itm", k)
+ * Clickable areas: bga_NNN.dat (640x480 bytes, bottom-up, 0/0xff = none).
+ * The button at (504,424)-(632,472) leaves the room (20); right click = 100.
+ * On a click: var16[18] = area; if the .itm table (6 x 13 x 3 bytes) has an
+ * item at [var4[785] - 4][area][k], var32[18] = 1 and var16[8] = item.
+ */
+#define ROOM_BTN_X 504
+#define ROOM_BTN_Y 424
+#define ROOM_BTN_W 128
+#define ROOM_BTN_H 48
+
+static void room_draw(const uint8_t *areas, int hover)
+{
+	SDL_Surface *ov = gfx_get_overlay(2);
+	SDL_CALL(SDL_FillRect, ov, NULL, SDL_MapRGBA(ov->format, 0, 0, 0, 0));
+	// highlight the area under the cursor
+	if (hover > 0 && hover < 0xff && hover != 20) {
+		SDL_LockSurface(ov);
+		uint32_t c = SDL_MapRGBA(ov->format, 255, 255, 255, 60);
+		for (int y = 0; y < 480; y++) {
+			const uint8_t *m = areas + (479 - y) * 640;
+			uint32_t *d = (uint32_t*)((uint8_t*)ov->pixels + y * ov->pitch);
+			for (int x = 0; x < 640; x++) {
+				if (m[x] == hover)
+					d[x] = c;
+			}
+		}
+		SDL_UnlockSurface(ov);
+	}
+	SDL_Rect b = { ROOM_BTN_X, ROOM_BTN_Y, ROOM_BTN_W, ROOM_BTN_H };
+	SDL_Rect in = { b.x + 3, b.y + 3, b.w - 6, b.h - 6 };
+	SDL_CALL(SDL_FillRect, ov, &b, SDL_MapRGBA(ov->format, hover == 20 ? 240 : 160, 30, 30, 240));
+	SDL_CALL(SDL_FillRect, ov, &in, SDL_MapRGBA(ov->format, hover == 20 ? 110 : 40, 10, 10, 230));
+	gfx_fill(0, 0, 640, 480, WORK_SURFACE, 0);
+	gfx_text_set_colors(0, 0xffffff);
+	gfx_text_set_size(18, 0);
+	const char *label = "방에서 나가기";
+	work_text(b.x + (b.w - (int)text_width(label)) / 2, b.y + 13, label);
+	SDL_Surface *ts = gfx_get_surface(WORK_SURFACE);
+	SDL_CALL(SDL_SetColorKey, ts, SDL_TRUE, SDL_MapRGB(ts->format, 0, 0, 0));
+	SDL_CALL(SDL_BlitSurface, ts, &b, ov, &b);
+	SDL_CALL(SDL_SetColorKey, ts, SDL_FALSE, 0);
+	gfx_overlay_enable(2);
+	gfx_screen_dirty();
+}
+
+static int room_hit(const uint8_t *areas, unsigned x, unsigned y)
+{
+	if (x >= ROOM_BTN_X && x < ROOM_BTN_X + ROOM_BTN_W
+			&& y >= ROOM_BTN_Y && y < ROOM_BTN_Y + ROOM_BTN_H)
+		return 20;
+	if (x >= 640 || y >= 480)
+		return 0xff;
+	return areas[(479 - y) * 640 + x];
+}
+
+static void util_room(struct param_list *params)
+{
+	char name[64];
+	snprintf(name, sizeof(name), "%s", name_param(params, 1, 99));
+	char *dot = strrchr(name, '.');
+	if (dot)
+		strcpy(dot, ".dat");
+	struct archive_data *dat = asset_data_load(name);
+	struct archive_data *itm = asset_data_load(name_param(params, 2, 99));
+	unsigned k = param_or(params, 3, 0);
+	if (!dat || dat->size < 640 * 480) {
+		WARNING("hanahebi: room areas \"%s\" not found", name);
+		if (dat)
+			archive_data_release(dat);
+		if (itm)
+			archive_data_release(itm);
+		mem_set_var16(18, 100);
+		return;
+	}
+	int hover = -1, last = -2, result = -1;
+	input_wait_until_up(INPUT_ACTIVATE);
+	input_wait_until_up(INPUT_CANCEL);
+	while (result < 0) {
+		unsigned cx, cy;
+		cursor_get_pos(&cx, &cy);
+		hover = room_hit(dat->data, cx, cy);
+		if (hover != last) {
+			room_draw(dat->data, hover);
+			last = hover;
+		}
+		if (input_down(INPUT_CANCEL)) {
+			input_wait_until_up(INPUT_CANCEL);
+			result = 100;
+		} else if (input_down(INPUT_ACTIVATE)) {
+			cursor_get_pos(&cx, &cy);
+			int id = room_hit(dat->data, cx, cy);
+			input_wait_until_up(INPUT_ACTIVATE);
+			if (id != 0 && id != 0xff)
+				result = id;
+		}
+		vm_peek();
+		vm_delay(16);
+	}
+	gfx_overlay_disable(2);
+	gfx_screen_dirty();
+	mem_set_var16(18, result);
+	mem_set_var32(18, 0);
+	if (result != 100 && result != 20 && itm) {
+		int row = (int)memory_raw[VAR4_OFF + 785] - 4;
+		size_t off = ((size_t)row * 13 + result) * 3 + k;
+		if (row >= 0 && result < 13 && k < 3 && off < itm->size && itm->data[off] != 0xff) {
+			mem_set_var16(8, itm->data[off]);
+			mem_set_var32(18, 1);
+		} else {
+			mem_set_var16(8, 0xff);
+		}
+	}
+	archive_data_release(dat);
+	if (itm)
+		archive_data_release(itm);
+}
+
 static void util_save_screen(unsigned mode)
 {
 	if (mode >= 2)
@@ -3008,6 +3132,16 @@ static void hanahebi_mem_init(void)
 	//   flags |= 0x402 | 0x2000 (0x2000 unless [DispEffect] Play == 3)
 	mem_set_var4(4013, 1);
 	mem_set_sysvar16(23, BACK_SURFACE);
+	// debugging: HH_DEBUG_SET="1662:1,785:5" sets var4 values at start
+	const char *set = getenv("HH_DEBUG_SET");
+	while (set && *set) {
+		unsigned i, v;
+		if (sscanf(set, "%u:%u", &i, &v) == 2 && i < VAR4_SIZE)
+			memory_raw[VAR4_OFF + i] = v;
+		set = strchr(set, ',');
+		if (set)
+			set++;
+	}
 	uint16_t flags = mem_get_sysvar16(mes_sysvar16_flags) | 0x402 | 0x2000;
 	const char *play = config_ini_get("DispEffect", "Play");
 	if (play && atoi(play) == 3)
