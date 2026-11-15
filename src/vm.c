@@ -1036,8 +1036,12 @@ static void _vm_stmt_mescall(bool save_procedures)
 	// save current VM state
 	struct vm_mes_call *frame = &vm.mes_call_stack[vm.mes_call_stack_ptr++];
 	frame->ip = vm.ip;
-	memcpy(frame->mes_name, mem_mes_name(), 12);
-	frame->mes_name[12] = '\0';
+	// the name field ends where var4 starts: 12 characters in most games, but
+	// e.g. Hana to Hebi has longer names ("FASchoukyou.mes")
+	size_t cap = memory_ptr.var4 > memory_raw ? (size_t)(memory_ptr.var4 - memory_raw) : 13;
+	size_t len = cap > 13 ? min(cap - 1, sizeof(frame->mes_name) - 1) : 12;
+	strncpy(frame->mes_name, mem_mes_name(), len);
+	frame->mes_name[len] = '\0';
 	if (save_procedures)
 		memcpy(frame->procedures, vm.procedures, sizeof(vm.procedures));
 
