@@ -152,6 +152,7 @@ static void msgwin_show(void);
 static void msgwin_hide(void);
 static void util_save_screen(unsigned mode);
 static void util_system_menu(void);
+static void util_cg_mode(void);
 static void util_music_mode(unsigned current);
 static void util_title_menu(unsigned menu);
 static void util_backlog_view(void);
@@ -850,6 +851,9 @@ static void hanahebi_util(struct param_list *params)
 		break;
 	case 24000:
 		util_music_mode(param_or(params, 2, 0xff));
+		break;
+	case 21000:
+		util_cg_mode();
 		break;
 	case 502: msgwin_show(); break;
 	case 503: msgwin_hide(); break;
@@ -2426,6 +2430,282 @@ static void util_music_mode(unsigned current)
 	items[25] = "돌아가기";
 	int r = choice_run(items, 26);
 	mem_set_var16(18, r < 0 || r == 25 ? 0 : r == 24 ? 30 : r + 1);
+}
+
+/*
+ * Util 21000: CG gallery (our own screens). The CG lists are the .itm files
+ * in data.arc (HH2D.exe 0x427c50): u32 nr_groups, then 0xff8-byte groups:
+ * u32 unlock flag (var4 index), u32 nr_entries, entries of 0x44 bytes:
+ * up to 4 x (char name[8], char code[8]) image layers, u32 unlock flag.
+ */
+#define CG_GROUP_SIZE 0xff8
+#define CG_ENTRY_SIZE 0x44
+
+static const char *cg_list_files[10] = {
+	"sizu_normal.itm", "kei_normal.itm", "kyou_normal.itm", "mit_normal.itm", "cha_normal.itm",
+	"sizu_choukyou.itm", "kei_choukyou.itm", "kyou_choukyou.itm", "mit_choukyou.itm",
+	"cha_choukyou.itm",
+};
+static const char *cg_list_names[10] = {
+	"시즈코", "케이코", "쿄코", "미츠코", "체코",
+	"시즈코 (조교)", "케이코 (조교)", "쿄코 (조교)", "미츠코 (조교)", "체코 (조교)",
+};
+
+static bool var4_set(uint32_t i)
+{
+	// debugging: HH_DEBUG_UNLOCK=1 shows every CG
+	static int unlock = -1;
+	if (unlock < 0)
+		unlock = getenv("HH_DEBUG_UNLOCK") != NULL;
+	if (unlock)
+		return true;
+	return i < VAR4_SIZE && memory_raw[VAR4_OFF + i] == 1;
+}
+
+static const uint8_t *cg_group(struct archive_data *itm, unsigned g)
+{
+	size_t off = 4 + (size_t)g * CG_GROUP_SIZE;
+	return off + CG_GROUP_SIZE <= itm->size ? itm->data + off : NULL;
+}
+
+static unsigned cg_nr_groups(struct archive_data *itm)
+{
+	if (itm->size < 4)
+		return 0;
+	return min(le_get32(itm->data, 0), (uint32_t)((itm->size - 4) / CG_GROUP_SIZE));
+}
+
+// layer `l` of entry `e` of a group, or NULL
+static const char *cg_layer(const uint8_t *grp, unsigned e, unsigned l, char *buf)
+{
+	unsigned n = le_get32(grp, 4);
+	if (e >= n || l >= 4 || 8 + (e + 1) * CG_ENTRY_SIZE > CG_GROUP_SIZE)
+		return NULL;
+	const char *name = (const char*)grp + 8 + e * CG_ENTRY_SIZE + l * 16;
+	if (!name[0])
+		return NULL;
+	snprintf(buf, 32, "%.8s.gcc", name);
+	return buf;
+}
+
+static SDL_Surface *cg_surface(const char *name)
+{
+	struct cg *cg = hh_cg_load(name);
+	if (!cg)
+		return NULL;
+	SDL_Surface *s = NULL;
+	if (!cg->palette && cg->metrics.bpp != 8) {
+		SDL_Surface *tmp = SDL_CreateRGBSurfaceWithFormatFrom(cg->pixels, cg->metrics.w,
+				cg->metrics.h, 32, cg->metrics.w * 4, SDL_PIXELFORMAT_RGBA32);
+		s = SDL_ConvertSurfaceFormat(tmp, SDL_PIXELFORMAT_RGBA32, 0);
+		SDL_FreeSurface(tmp);
+		SDL_SetSurfaceBlendMode(s, SDL_BLENDMODE_NONE);
+	}
+	cg_free(cg);
+	return s;
+}
+
+static void cg_show_full(SDL_Surface *img)
+{
+	SDL_Surface *ov = gfx_get_overlay(2);
+	SDL_CALL(SDL_FillRect, ov, NULL, SDL_MapRGBA(ov->format, 0, 0, 0, 255));
+	SDL_Rect r = { 0, 0, 640, 480 };
+	SDL_CALL(SDL_BlitScaled, img, NULL, ov, &r);
+	gfx_overlay_enable(2);
+	gfx_screen_dirty();
+}
+
+// wait for a click: true = next, false = cancel
+static bool cg_wait_click(void)
+{
+	input_wait_until_up(INPUT_ACTIVATE);
+	while (true) {
+		if (input_down(INPUT_ACTIVATE)) {
+			input_wait_until_up(INPUT_ACTIVATE);
+			return true;
+		}
+		if (input_down(INPUT_CANCEL)) {
+			input_wait_until_up(INPUT_CANCEL);
+			return false;
+		}
+		vm_peek();
+		vm_delay(16);
+	}
+}
+
+// show all unlocked images of a group, one per click
+static void cg_view_group(const uint8_t *grp)
+{
+	unsigned n = le_get32(grp, 4);
+	for (unsigned e = 0; e < n && e < 58; e++) {
+		if (!var4_set(le_get32(grp, 0x48 + e * CG_ENTRY_SIZE)))
+			continue;
+		for (unsigned l = 0; l < 4; l++) {
+			char buf[32];
+			const char *name = cg_layer(grp, e, l, buf);
+			if (!name)
+				continue;
+			SDL_Surface *img = cg_surface(name);
+			if (!img)
+				continue;
+			cg_show_full(img);
+			SDL_FreeSurface(img);
+			if (!cg_wait_click())
+				return;
+		}
+	}
+}
+
+#define CG_COLS 4
+#define CG_ROWS 3
+#define CG_PER_PAGE (CG_COLS * CG_ROWS)
+#define CG_TW 136
+#define CG_TH 102
+
+static void cg_thumb_rect(unsigned i, SDL_Rect *r)
+{
+	*r = (SDL_Rect) { 28 + (i % CG_COLS) * 148, 20 + (i / CG_COLS) * 128, CG_TW, CG_TH };
+}
+
+static void cg_grid_draw(struct archive_data *itm, unsigned list, unsigned page,
+		SDL_Surface **thumbs, int hover)
+{
+	SDL_Surface *ov = gfx_get_overlay(2);
+	SDL_CALL(SDL_FillRect, ov, NULL, SDL_MapRGBA(ov->format, 16, 6, 8, 245));
+	gfx_fill(0, 0, 640, 480, WORK_SURFACE, 0);
+	gfx_text_set_colors(0, 0xffffff);
+	gfx_text_set_size(18, 0);
+	unsigned n = cg_nr_groups(itm);
+	for (unsigned i = 0; i < CG_PER_PAGE && page * CG_PER_PAGE + i < n; i++) {
+		SDL_Rect r, b;
+		cg_thumb_rect(i, &r);
+		b = (SDL_Rect) { r.x - 3, r.y - 3, r.w + 6, r.h + 6 };
+		SDL_CALL(SDL_FillRect, ov, &b, SDL_MapRGBA(ov->format,
+				(int)i == hover ? 230 : 120, 30, 30, 255));
+		if (thumbs[i]) {
+			SDL_CALL(SDL_BlitScaled, thumbs[i], NULL, ov, &r);
+		} else {
+			SDL_CALL(SDL_FillRect, ov, &r, SDL_MapRGBA(ov->format, 30, 30, 30, 255));
+			work_text(r.x + r.w / 2 - 6, r.y + r.h / 2 - 10, "?");
+		}
+	}
+	unsigned pages = (n + CG_PER_PAGE - 1) / CG_PER_PAGE;
+	char t[64];
+	snprintf(t, sizeof(t), "%s   %u / %u", cg_list_names[list], page + 1, max(pages, 1u));
+	work_text(28, 420, t);
+	work_text(400, 420, "◀ 이전");
+	work_text(480, 420, "다음 ▶");
+	work_text(560, 420, "닫기");
+	SDL_Surface *ts = gfx_get_surface(WORK_SURFACE);
+	SDL_CALL(SDL_SetColorKey, ts, SDL_TRUE, SDL_MapRGB(ts->format, 0, 0, 0));
+	SDL_CALL(SDL_BlitSurface, ts, NULL, ov, NULL);
+	SDL_CALL(SDL_SetColorKey, ts, SDL_FALSE, 0);
+	gfx_overlay_enable(2);
+	gfx_screen_dirty();
+}
+
+static void cg_load_thumbs(struct archive_data *itm, unsigned page, SDL_Surface **thumbs)
+{
+	unsigned n = cg_nr_groups(itm);
+	for (unsigned i = 0; i < CG_PER_PAGE; i++) {
+		if (thumbs[i])
+			SDL_FreeSurface(thumbs[i]);
+		thumbs[i] = NULL;
+		unsigned g = page * CG_PER_PAGE + i;
+		const uint8_t *grp = g < n ? cg_group(itm, g) : NULL;
+		if (!grp || !var4_set(le_get32(grp, 0)))
+			continue;
+		char buf[32];
+		const char *name = cg_layer(grp, 0, 0, buf);
+		SDL_Surface *img = name ? cg_surface(name) : NULL;
+		if (!img)
+			continue;
+		thumbs[i] = SDL_CreateRGBSurfaceWithFormat(0, CG_TW, CG_TH, 32, SDL_PIXELFORMAT_RGBA32);
+		SDL_CALL(SDL_BlitScaled, img, NULL, thumbs[i], NULL);
+		SDL_FreeSurface(img);
+	}
+}
+
+static void cg_list_run(unsigned list)
+{
+	struct archive_data *itm = asset_data_load(cg_list_files[list]);
+	if (!itm)
+		return;
+	unsigned n = cg_nr_groups(itm), pages = max((n + CG_PER_PAGE - 1) / CG_PER_PAGE, 1u);
+	unsigned page = 0;
+	SDL_Surface *thumbs[CG_PER_PAGE] = {0};
+	cg_load_thumbs(itm, page, thumbs);
+	int hover = -1, last = -2;
+	input_wait_until_up(INPUT_ACTIVATE);
+	while (true) {
+		unsigned cx, cy;
+		cursor_get_pos(&cx, &cy);
+		hover = -1;
+		for (unsigned i = 0; i < CG_PER_PAGE; i++) {
+			SDL_Rect r;
+			cg_thumb_rect(i, &r);
+			if ((int)cx >= r.x && (int)cx < r.x + r.w && (int)cy >= r.y && (int)cy < r.y + r.h)
+				hover = i;
+		}
+		if (hover != last) {
+			cg_grid_draw(itm, list, page, thumbs, hover);
+			last = hover;
+		}
+		if (input_down(INPUT_CANCEL)) {
+			input_wait_until_up(INPUT_CANCEL);
+			break;
+		}
+		bool prev = input_down(INPUT_LEFT), next = input_down(INPUT_RIGHT);
+		if (input_down(INPUT_ACTIVATE)) {
+			input_wait_until_up(INPUT_ACTIVATE);
+			cursor_get_pos(&cx, &cy);
+			hover = -1;
+			for (unsigned i = 0; i < CG_PER_PAGE; i++) {
+				SDL_Rect r;
+				cg_thumb_rect(i, &r);
+				if ((int)cx >= r.x && (int)cx < r.x + r.w && (int)cy >= r.y && (int)cy < r.y + r.h)
+					hover = i;
+			}
+			if (cy >= 410 && cx >= 550)
+				break;
+			prev = prev || (cy >= 410 && cx >= 390 && cx < 470);
+			next = next || (cy >= 410 && cx >= 470 && cx < 550);
+			unsigned g = page * CG_PER_PAGE + hover;
+			if (hover >= 0 && thumbs[hover] && g < n) {
+				cg_view_group(cg_group(itm, g));
+				last = -2;
+			}
+		}
+		if (prev || next) {
+			input_wait_until_up(prev ? INPUT_LEFT : INPUT_RIGHT);
+			page = (page + (prev ? pages - 1 : 1)) % pages;
+			cg_load_thumbs(itm, page, thumbs);
+			last = -2;
+		}
+		vm_peek();
+		vm_delay(16);
+	}
+	for (unsigned i = 0; i < CG_PER_PAGE; i++) {
+		if (thumbs[i])
+			SDL_FreeSurface(thumbs[i]);
+	}
+	archive_data_release(itm);
+}
+
+static void util_cg_mode(void)
+{
+	const char *items[11];
+	for (unsigned i = 0; i < 10; i++)
+		items[i] = cg_list_names[i];
+	items[10] = "돌아가기";
+	while (true) {
+		int r = choice_run(items, 11);
+		if (r < 0 || r == 10)
+			break;
+		cg_list_run(r);
+	}
+	gfx_overlay_disable(2);
+	gfx_screen_dirty();
 }
 
 static void util_save_screen(unsigned mode)
