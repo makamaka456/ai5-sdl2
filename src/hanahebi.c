@@ -589,6 +589,65 @@ static void choice_rect(struct choice_layout *l, unsigned i, SDL_Rect *r)
 	r->h = l->h;
 }
 
+/*
+ * Buttons from sel.gcc (256x240): 4 rows of 60 px (normal, highlighted,
+ * pressed, disabled); a button is [0,108) + n x [216,224) + [224,256) +
+ * n x [216,224) + [108,216), like LIBLARY.LIB sub 37 builds them.
+ */
+static SDL_Surface *sel_parts = NULL;
+static bool sel_tried = false;
+
+static SDL_Surface *sel_load(void)
+{
+	if (sel_tried)
+		return sel_parts;
+	sel_tried = true;
+	struct cg *cg = hh_cg_load("sel.gcc");
+	if (!cg || cg->palette || cg->metrics.bpp == 8) {
+		if (cg)
+			cg_free(cg);
+		return NULL;
+	}
+	SDL_Surface *tmp = SDL_CreateRGBSurfaceWithFormatFrom(cg->pixels, cg->metrics.w,
+			cg->metrics.h, 32, cg->metrics.w * 4, SDL_PIXELFORMAT_RGBA32);
+	// the CG is placed at y=1 in a 256x240 picture
+	sel_parts = SDL_CreateRGBSurfaceWithFormat(0, 256, 240, 32, SDL_PIXELFORMAT_RGBA32);
+	SDL_SetSurfaceBlendMode(tmp, SDL_BLENDMODE_NONE);
+	SDL_Rect dst = { cg->metrics.x, cg->metrics.y, cg->metrics.w, cg->metrics.h };
+	SDL_BlitSurface(tmp, NULL, sel_parts, &dst);
+	SDL_FreeSurface(tmp);
+	cg_free(cg);
+	SDL_SetSurfaceBlendMode(sel_parts, SDL_BLENDMODE_BLEND);
+	return sel_parts;
+}
+
+// width of a sel.gcc button holding `tw` pixels of text
+static int sel_button_width(int tw)
+{
+	int n = 0;
+	while (248 + 16 * n < tw + 120 && 248 + 16 * n < 620)
+		n++;
+	return 248 + 16 * n;
+}
+
+static void sel_draw_button(SDL_Surface *dst, int x, int y, int w, int state)
+{
+	SDL_Surface *p = sel_load();
+	int n = (w - 248) / 16, sy = state * 60;
+	SDL_Rect s, d;
+#define PIECE(sx_, sw_) do { \
+		s = (SDL_Rect){ sx_, sy, sw_, 60 }; d = (SDL_Rect){ x, y, sw_, 60 }; \
+		SDL_BlitSurface(p, &s, dst, &d); x += sw_; } while (0)
+	PIECE(0, 108);
+	for (int i = 0; i < n; i++)
+		PIECE(216, 8);
+	PIECE(224, 32);
+	for (int i = 0; i < n; i++)
+		PIECE(216, 8);
+	PIECE(108, 108);
+#undef PIECE
+}
+
 static void choice_draw(struct choice_layout *l, const char **items, int hover)
 {
 	SDL_Surface *ov = gfx_get_overlay(2);
@@ -598,6 +657,23 @@ static void choice_draw(struct choice_layout *l, const char **items, int hover)
 	for (unsigned i = 0; i < l->n; i++) {
 		SDL_Rect border;
 		choice_rect(l, i, &border);
+		if (l->h == 60 && sel_load()) {
+			// original-style button from sel.gcc, text drawn on top
+			sel_draw_button(ov, border.x, border.y, border.w, (int)i == hover ? 1 : 0);
+			const char *text = items[i];
+			int tx = border.x + (border.w - (int)text_width(text)) / 2;
+			int ty = border.y + (60 - 22) / 2;
+			while (*text) {
+				int ch;
+				text = utf8_next(text, &ch);
+				tx += gfx_text_draw_glyph(tx, ty, WORK_SURFACE, ch);
+			}
+			SDL_Surface *ts = gfx_get_surface(WORK_SURFACE);
+			SDL_CALL(SDL_SetColorKey, ts, SDL_TRUE, SDL_MapRGB(ts->format, 0, 0, 0));
+			SDL_CALL(SDL_BlitSurface, ts, &border, ov, &border);
+			SDL_CALL(SDL_SetColorKey, ts, SDL_FALSE, 0);
+			continue;
+		}
 		SDL_Rect inner = { border.x + 3, border.y + 3, border.w - 6, border.h - 6 };
 		bool hl = (int)i == hover;
 		SDL_CALL(SDL_FillRect, ov, &border, SDL_MapRGBA(ov->format, hl ? 230 : 160, 30, 30, 230));
@@ -627,7 +703,12 @@ static int choice_run(const char **items, unsigned n)
 	int tw = 0;
 	for (unsigned i = 0; i < n; i++)
 		tw = max(tw, (int)text_width(items[i]));
-	if (n <= 6) {
+	if (n <= 7 && sel_load()) {
+		// original-style buttons (sel.gcc), 60 px high
+		l.cols = 1; l.rows = n;
+		l.h = 60; l.step_y = 64;
+		l.w = sel_button_width(tw);
+	} else if (n <= 6) {
 		l.cols = 1; l.rows = n;
 		l.h = 56; l.step_y = 64;
 		l.w = min(max(tw + 96, 320), 600);
