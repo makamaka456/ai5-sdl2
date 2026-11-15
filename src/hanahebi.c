@@ -152,6 +152,7 @@ static void msgwin_show(void);
 static void msgwin_hide(void);
 static void util_save_screen(unsigned mode);
 static void util_system_menu(void);
+static void util_ending_mode(unsigned last_tab);
 static void util_scene_mode(unsigned last_tab);
 static void util_cg_mode(void);
 static void util_music_mode(unsigned current);
@@ -858,6 +859,9 @@ static void hanahebi_util(struct param_list *params)
 		break;
 	case 23000:
 		util_scene_mode(param_or(params, 1, 0));
+		break;
+	case 22000:
+		util_ending_mode(param_or(params, 1, 0));
 		break;
 	case 502: msgwin_show(); break;
 	case 503: msgwin_hide(); break;
@@ -2727,37 +2731,50 @@ static const uint16_t scene_flags[5][15] = {
 static const unsigned scene_counts[5] = { 15, 10, 8, 9, 11 };
 static const char *scene_tabs[5] = { "시즈코", "케이코", "쿄코", "미츠코", "체코 외" };
 
-static bool scene_seen(unsigned tab, unsigned i)
+// Util 22000: endings (HH2D.exe 0x597ba0)
+static const uint16_t ending_flags[6][13] = {
+	{ 5069, 5070, 5071, 5072 },
+	{ 5073, 5074, 5075, 5076 },
+	{ 5077, 5078, 5079, 5080 },
+	{ 5081, 5082, 5083, 5084 },
+	{ 5066, 5067, 5068, 5085 },
+	{ 5053, 5054, 5055, 5056, 5057, 5058, 5059, 5060, 5061, 5062, 5063, 5064, 5065 },
+};
+static const unsigned ending_counts[6] = { 4, 4, 4, 4, 4, 13 };
+static const char *ending_tabs[6] = { "시즈코", "케이코", "쿄코", "미츠코", "체코 외", "배드 엔딩" };
+
+static bool flag_seen(uint16_t f)
 {
-	uint16_t f = scene_flags[tab][i];
 	if (getenv("HH_DEBUG_UNLOCK"))
 		return true;
 	return f < VAR4_SIZE && memory_raw[VAR4_OFF + f] != 0;
 }
 
-static void util_scene_mode(unsigned last_tab)
+// tab list -> item list; var16[9] = tab + 1 (0 = back), var16[18] = item + 1
+static void replay_menu(unsigned nr_tabs, const char **tabs, const unsigned *counts,
+		const uint16_t *flags, unsigned stride, const char *item_word, unsigned last_tab)
 {
 	mem_set_var16(9, 0);
 	mem_set_var16(18, 0);
-	unsigned tab = last_tab < 5 ? last_tab : 0;
+	unsigned tab = last_tab < nr_tabs ? last_tab : 0;
 	bool choose_tab = true;
 	while (true) {
 		if (choose_tab) {
-			const char *items[6];
-			for (unsigned t = 0; t < 5; t++)
-				items[t] = scene_tabs[t];
-			items[5] = "돌아가기";
-			int r = choice_run(items, 6);
-			if (r < 0 || r == 5)
+			const char *items[8];
+			for (unsigned t = 0; t < nr_tabs; t++)
+				items[t] = tabs[t];
+			items[nr_tabs] = "돌아가기";
+			int r = choice_run(items, nr_tabs + 1);
+			if (r < 0 || r == (int)nr_tabs)
 				return;
 			tab = r;
 		}
-		char labels[16][32];
-		const char *items[16];
-		unsigned n = scene_counts[tab];
+		char labels[16][48];
+		const char *items[17];
+		unsigned n = counts[tab];
 		for (unsigned i = 0; i < n; i++) {
-			if (scene_seen(tab, i))
-				snprintf(labels[i], sizeof(labels[i]), "%s %02u", scene_tabs[tab], i + 1);
+			if (flag_seen(flags[tab * stride + i]))
+				snprintf(labels[i], sizeof(labels[i]), "%s %s %02u", tabs[tab], item_word, i + 1);
 			else
 				snprintf(labels[i], sizeof(labels[i]), "???");
 			items[i] = labels[i];
@@ -2768,7 +2785,7 @@ static void util_scene_mode(unsigned last_tab)
 			choose_tab = true;
 			continue;
 		}
-		if (!scene_seen(tab, r)) {
+		if (!flag_seen(flags[tab * stride + r])) {
 			choose_tab = false;
 			continue;
 		}
@@ -2776,6 +2793,16 @@ static void util_scene_mode(unsigned last_tab)
 		mem_set_var16(18, r + 1);
 		return;
 	}
+}
+
+static void util_scene_mode(unsigned last_tab)
+{
+	replay_menu(5, scene_tabs, scene_counts, &scene_flags[0][0], 15, "장면", last_tab);
+}
+
+static void util_ending_mode(unsigned last_tab)
+{
+	replay_menu(6, ending_tabs, ending_counts, &ending_flags[0][0], 13, "엔딩", last_tab);
 }
 
 static void util_save_screen(unsigned mode)
