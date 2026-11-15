@@ -362,9 +362,15 @@ void gfx_init(const char *name)
 #endif
 	if (config.controller.enabled)
 		SDL_CALL(SDL_InitSubSystem, SDL_INIT_GAMECONTROLLER);
+#ifdef __ANDROID__
+	// a full screen window makes SDL hide the system bars (immersive mode)
+	uint32_t window_flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_FULLSCREEN_DESKTOP;
+#else
+	uint32_t window_flags = SDL_WINDOW_RESIZABLE;
+#endif
 	SDL_CTOR(SDL_CreateWindow, gfx.window, title,
 			SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, gfx_view.w, gfx_view.h,
-			SDL_WINDOW_RESIZABLE);
+			window_flags);
 	gfx.window_id = SDL_GetWindowID(gfx.window);
 	SDL_CTOR(SDL_CreateRenderer, gfx.renderer, gfx.window, -1, 0);
 	SDL_CALL(SDL_SetRenderDrawColor, gfx.renderer, 0, 0, 0, SDL_ALPHA_OPAQUE);
