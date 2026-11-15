@@ -1268,6 +1268,85 @@ static int map_step(bool back, int *room)
 	return 1;
 }
 
+/*
+ * Mini floor plan: the plan pictures in mappt.gcc (1st floor around
+ * (0,60)-(150,236), basement (148,168)-(248,240); red = corridors) with the
+ * current point. POINT.PT / POINT2.PT give each point's x, z; fitted so that
+ * the points lie on the red corridors.
+ */
+static struct { bool loaded; float x[MAP_MAX_NODES], z[MAP_MAX_NODES]; bool have[MAP_MAX_NODES]; } map_pts[2];
+static SDL_Surface *map_plan;
+
+static void map_load_points(unsigned floor)
+{
+	if (map_pts[floor].loaded)
+		return;
+	map_pts[floor].loaded = true;
+	struct archive_data *f = asset_data_load(floor ? "POINT2.PT" : "POINT.PT");
+	if (!f)
+		return;
+	unsigned n = f->size >= 4 ? le_get32(f->data, 0) : 0;
+	for (unsigned i = 0; i < n && 4 + (i + 1) * 22 <= f->size; i++) {
+		const uint8_t *e = f->data + 4 + i * 22;
+		float x, z;
+		memcpy(&x, e, 4);
+		memcpy(&z, e + 8, 4);
+		unsigned no = le_get16(e, 12);
+		if (no < MAP_MAX_NODES) {
+			map_pts[floor].x[no] = x;
+			map_pts[floor].z[no] = z;
+			map_pts[floor].have[no] = true;
+		}
+	}
+	archive_data_release(f);
+}
+
+static void map_draw_plan(SDL_Surface *ov)
+{
+	if (!map_plan) {
+		struct cg *cg = hh_cg_load("mappt.gcc");
+		if (!cg || cg->palette || cg->metrics.bpp == 8 || cg->metrics.w < 248 || cg->metrics.h < 240) {
+			if (cg)
+				cg_free(cg);
+			return;
+		}
+		SDL_Surface *tmp = SDL_CreateRGBSurfaceWithFormatFrom(cg->pixels, cg->metrics.w,
+				cg->metrics.h, 32, cg->metrics.w * 4, SDL_PIXELFORMAT_RGBA32);
+		map_plan = SDL_CreateRGBSurfaceWithFormat(0, 248, 184, 32, SDL_PIXELFORMAT_RGBA32);
+		SDL_SetSurfaceBlendMode(tmp, SDL_BLENDMODE_NONE);
+		SDL_Rect src = { 0, 56, 248, 184 };
+		SDL_BlitSurface(tmp, &src, map_plan, NULL);
+		SDL_FreeSurface(tmp);
+		cg_free(cg);
+		SDL_SetSurfaceBlendMode(map_plan, SDL_BLENDMODE_BLEND);
+		SDL_SetSurfaceAlphaMod(map_plan, 220);
+	}
+	map_load_points(map.floor);
+	// plan area (in map_plan = mappt.gcc from y 56) and the point -> plan
+	// fit (least squares onto the red corridors; the basement plan has z up)
+	SDL_Rect src = map.floor ? (SDL_Rect){ 146, 110, 100, 72 } : (SDL_Rect){ 0, 4, 168, 178 };
+	float ax = map.floor ? 3.01f : 2.4033f, bx = map.floor ? 214.7f : 72.04f;
+	float az = map.floor ? -2.654f : 2.977f, bz = map.floor ? 111.44f : 111.35f;
+	SDL_Rect dst = { 640 - src.w - 6, 6, src.w, src.h };
+	SDL_Rect bg = { dst.x - 2, dst.y - 2, dst.w + 4, dst.h + 4 };
+	SDL_CALL(SDL_FillRect, ov, &bg, SDL_MapRGBA(ov->format, 0, 0, 0, 150));
+	SDL_BlitSurface(map_plan, &src, ov, &dst);
+	if (!map_pts[map.floor].have[map.node])
+		return;
+	int cx = dst.x + (int)(ax * map_pts[map.floor].x[map.node] + bx) - src.x;
+	int cy = dst.y + (int)(az * map_pts[map.floor].z[map.node] + bz) - src.y;
+	// dot + a short line in the facing direction (0 = +z, 1 = -x, 2 = -z, 3 = +x)
+	static const int dx[4] = { 0, -1, 0, 1 }, dz[4] = { 1, 0, -1, 0 };
+	int ddy = az < 0 ? -dz[map.dir] : dz[map.dir];
+	uint32_t yellow = SDL_MapRGBA(ov->format, 255, 230, 40, 255);
+	for (int k = 1; k <= 7; k++) {
+		SDL_Rect r = { cx + dx[map.dir] * k - 1, cy + ddy * k - 1, 3, 3 };
+		SDL_CALL(SDL_FillRect, ov, &r, yellow);
+	}
+	SDL_Rect dot = { cx - 3, cy - 3, 7, 7 };
+	SDL_CALL(SDL_FillRect, ov, &dot, yellow);
+}
+
 // on-screen controls (overlay 2)
 enum { MW_NONE = -1, MW_FWD, MW_BACK, MW_LEFT, MW_RIGHT, MW_LIST, MW_PERSON, MW_NR };
 static const SDL_Rect mw_rects[MW_NR] = {
@@ -1331,6 +1410,7 @@ static void map_walk_draw(int hover)
 	mw_button(ov, MW_LEFT, hover, "◀");
 	mw_button(ov, MW_RIGHT, hover, "▶");
 	mw_button(ov, MW_LIST, hover, "방 목록");
+	map_draw_plan(ov);
 	if (map_person_here() >= 0)
 		mw_button(ov, MW_PERSON, hover, "누군가 있다");
 
