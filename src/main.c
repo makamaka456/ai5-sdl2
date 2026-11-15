@@ -25,6 +25,7 @@
 #include <SDL.h>
 
 #include "ai5.h"
+#include "ai5/arc.h"
 #include "ai5/game.h"
 #include "nulib/file.h"
 #include "nulib/string.h"
@@ -576,6 +577,43 @@ void restart(void)
 	execv(saved_argv[0], saved_argv);
 }
 
+/*
+ * Hana to Hebi: the Korean patch replaces the script text with CP949 but
+ * keeps the file names. Tell the two apart by the lead bytes of the text:
+ * Shift-JIS kana/kanji mostly start with 0x82/0x83/0x88-0x9f, CP949 Hangul
+ * with 0xb0-0xc8.
+ */
+static bool hanahebi_text_is_cp949(void)
+{
+	if (!config.file.mes.name)
+		return false;
+	char *path = path_get_icase(config.file.mes.name);
+	if (!path)
+		return false;
+	struct archive *arc = archive_open(path, 0);
+	free(path);
+	if (!arc)
+		return false;
+	unsigned sjis = 0, cp949 = 0;
+	const char *names[] = { "FAS000.MES", "START.MES", "MAIN.MES" };
+	for (unsigned i = 0; i < ARRAY_SIZE(names); i++) {
+		struct archive_data *d = archive_get(arc, names[i]);
+		if (!d)
+			continue;
+		for (size_t j = 0; j < d->size; j++) {
+			uint8_t b = d->data[j];
+			if (b == 0x82 || b == 0x83 || (b >= 0x88 && b <= 0x9f))
+				sjis++;
+			else if (b >= 0xb0 && b <= 0xc8)
+				cp949++;
+		}
+		archive_data_release(d);
+	}
+	archive_close(arc);
+	NOTICE("Hana to Hebi script text: %u Shift-JIS / %u CP949 lead bytes", sjis, cp949);
+	return cp949 > 100 && cp949 > sjis * 4;
+}
+
 #ifdef __ANDROID__
 #include <android/log.h>
 // show fatal errors instead of silently closing the app
@@ -827,6 +865,13 @@ int main(int argc, char *argv[])
 	DEFAULT_NAME(config.file.data, "DATA.ARC");
 	DEFAULT_NAME(config.file.priv, "PRIV.ARC");
 #undef DEFAULT_NAME
+
+	// Hana to Hebi Korean patch: detect it from the script text
+	if (ai5_target_game == GAME_HANAHEBI && !text_encoding_is_cp949()
+			&& hanahebi_text_is_cp949()) {
+		NOTICE("Korean patch detected: using Korean mode");
+		text_encoding = TEXT_ENCODING_CP949;
+	}
 
 	mes_text_cp949 = text_encoding_is_cp949();
 
