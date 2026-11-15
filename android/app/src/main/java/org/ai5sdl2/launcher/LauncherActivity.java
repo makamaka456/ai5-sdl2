@@ -138,7 +138,8 @@ public class LauncherActivity extends Activity {
 
         TextView hint = new TextView(this);
         hint.setText("누르면 실행, 길게 누르면 이름 바꾸기·한글판 설정·삭제. "
-                + "게임 중: 화면 터치 = 클릭, 뒤로 가기·[메뉴] = 오른쪽 클릭, [넘기기] = Ctrl.");
+                + "게임 중: 화면 터치 = 클릭, 두 손가락 탭·뒤로 가기·[메뉴] = 오른쪽 클릭(메뉴/취소), "
+                + "[넘기기] = 대사 빨리 넘기기. 꽃과뱀 한글판은 자동으로 감지됩니다.");
         hint.setTextColor(0xFF999999);
         hint.setTextSize(12);
         root.addView(hint);

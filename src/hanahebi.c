@@ -1929,7 +1929,9 @@ static void hh_save_union_var4(unsigned no)
 	savedata_read(flag_file(no), buf, 0, sizeof(buf));
 	uint8_t *f = buf + VAR4_OFF, *v = memory_raw + VAR4_OFF;
 	for (unsigned i = 0; i < VAR4_SIZE; i++) {
-		if (i == 4250)
+		// 4250/4251 (the title menu to return to) are not progress flags:
+		// keep the current value instead of the maximum
+		if (i == 4250 || i == 4251)
 			f[i] = v[i];
 		else if (i < 5000)
 			f[i] = max(f[i], v[i]);
