@@ -59,7 +59,7 @@ public class GameActivity extends SDLActivity {
     }
 
     private SharedPreferences prefs() {
-        return Settings.prefs(this);
+        return AppSettings.prefs(this);
     }
 
     @Override
@@ -72,7 +72,7 @@ public class GameActivity extends SDLActivity {
         // fonts are copied to <files>/fonts by the launcher
         nativeSetenv("AI5_DATA_DIR", getFilesDir().getAbsolutePath());
         nativeSetenv("SDL_ANDROID_TRAP_BACK_BUTTON", "1");
-        nativeSetenv("AI5_CONTROLLER", Settings.controllerConfig(this));
+        nativeSetenv("AI5_CONTROLLER", AppSettings.controllerConfig(this));
         applyDisplaySettings();
         ArrayList<String> args = new ArrayList<>();
         String[] extra = getIntent().getStringArrayExtra(EXTRA_ARGS);
@@ -86,8 +86,8 @@ public class GameActivity extends SDLActivity {
 
     // the engine reads these every frame, so changes apply at once
     private void applyDisplaySettings() {
-        nativeSetenv("AI5_STRETCH", Settings.stretch(this) ? "1" : "0");
-        nativeSetenv("AI5_BACKGROUND", Settings.backgroundPath(this, gameId()));
+        nativeSetenv("AI5_STRETCH", AppSettings.stretch(this) ? "1" : "0");
+        nativeSetenv("AI5_BACKGROUND", AppSettings.backgroundPath(this, gameId()));
     }
 
     @Override
@@ -322,8 +322,8 @@ public class GameActivity extends SDLActivity {
     // ------------------------------------------------------------ settings (⚙)
 
     private void showSettings() {
-        boolean stretch = Settings.stretch(this);
-        boolean hasBg = !Settings.backgroundPath(this, gameId()).isEmpty();
+        boolean stretch = AppSettings.stretch(this);
+        boolean hasBg = !AppSettings.backgroundPath(this, gameId()).isEmpty();
         String[] items = {
             "화면 비율: " + (stretch ? "꽉 채우기 → 원래 비율(4:3)로" : "원래 비율(4:3) → 꽉 채우기로"),
             hasBg ? "배경화면 바꾸기" : "배경화면 고르기",
@@ -349,7 +349,7 @@ public class GameActivity extends SDLActivity {
                         pickBackground();
                         break;
                     case 2:
-                        Settings.clearBackground(this, gameId());
+                        AppSettings.clearBackground(this, gameId());
                         applyDisplaySettings();
                         break;
                     case 3:
@@ -376,7 +376,7 @@ public class GameActivity extends SDLActivity {
                         buildButtons();
                         break;
                     case 8:
-                        Settings.padSettings(this, "(다음 실행부터)");
+                        AppSettings.padSettings(this, "(다음 실행부터)");
                         break;
                     case 9:
                         hidden = true;
@@ -448,7 +448,7 @@ public class GameActivity extends SDLActivity {
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
         if (req == REQ_IMAGE && res == RESULT_OK && data != null && data.getData() != null) {
-            if (Settings.saveBackground(this, gameId(), data.getData())) {
+            if (AppSettings.saveBackground(this, gameId(), data.getData())) {
                 // the file name stays the same: clear first so the engine reloads it
                 nativeSetenv("AI5_BACKGROUND", "");
                 overlay.postDelayed(this::applyDisplaySettings, 200);

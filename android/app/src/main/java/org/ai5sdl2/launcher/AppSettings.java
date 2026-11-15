@@ -14,8 +14,8 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 
-final class Settings {
-    private Settings() {}
+final class AppSettings {
+    private AppSettings() {}
 
     // the launcher and the game run in different processes
     @SuppressWarnings("deprecation")

@@ -123,7 +123,7 @@ SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./build/ai5 <게임폴더>
   - 리눅스에서 시험: `cmake android/app/jni && make main` (PC에서 CMake 설정 오류를 먼저 잡을 수 있음)
   - 자바: `LauncherActivity`(게임 폴더 목록, 폴더 추가→자동 감지, 길게 눌러 한글판 설정), `GameActivity`(SDLActivity, 화면 버튼 메뉴/넘기기/⋮, 뒤로 가기=오른쪽 클릭, 별도 프로세스 `:game`)
   - 게임 파일은 복사하지 않고 "모든 파일 접근" 권한으로 폴더를 직접 읽음. 글꼴은 assets → 앱 폴더로 복사 후 `AI5_DATA_DIR` 환경 변수로 엔진에 알림
-- 런처(2026-11-15 개편): 지원 게임 목록 + 게임별 폴더, 각 줄 [배경화면] 버튼(그림 → 앱 폴더 `bg_<게임>.png`), 화면 꽉 채우기, 게임패드 설정. 공용 설정은 `Settings.java`(SharedPreferences "launcher", 두 프로세스가 같이 씀)
+- 런처(2026-11-15 개편): 지원 게임 목록 + 게임별 폴더, 각 줄 [배경화면] 버튼(그림 → 앱 폴더 `bg_<게임>.png`), 화면 꽉 채우기, 게임패드 설정. 공용 설정은 `AppSettings.java`(SharedPreferences "launcher", 두 프로세스가 같이 씀)
 - 게임 화면: 가상 버튼(오른쪽 메뉴·넘기기·⚙, 왼쪽 숨기기·지난 대사, 선택: 결정·효과 빨리), ⚙ = 화면 비율·배경화면·버튼 크기/투명도/위치(끌어서)·게임패드·버튼 숨기기·끝내기
 - 엔진 환경 변수: `AI5_STRETCH`(1=꽉 채우기), `AI5_BACKGROUND`(PNG 경로, 화면 전체 배경), 둘 다 매 프레임 확인해서 게임 중 바로 바뀜. `AI5_CONTROLLER`는 시작할 때만 읽음
 - APK는 GitHub Actions `Android` 워크플로(`.github/workflows/android.yaml`) 산출물 `ai5-launcher-apk` (작업 공간에서는 dl.google.com이 막혀 직접 빌드 불가)

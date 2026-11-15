@@ -87,7 +87,7 @@ public class LauncherActivity extends Activity {
     }
 
     private SharedPreferences prefs() {
-        return Settings.prefs(this);
+        return AppSettings.prefs(this);
     }
 
     private String folderOf(int i) {
@@ -154,7 +154,7 @@ public class LauncherActivity extends Activity {
         root.addView(row);
         Button pad = new Button(this);
         pad.setText("게임패드 버튼 설정");
-        pad.setOnClickListener(v -> Settings.padSettings(this, null));
+        pad.setOnClickListener(v -> AppSettings.padSettings(this, null));
         root.addView(pad, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -303,7 +303,7 @@ public class LauncherActivity extends Activity {
         super.onActivityResult(req, res, data);
         if (req == REQ_IMAGE && res == RESULT_OK && data != null && data.getData() != null
                 && pickingFor >= 0) {
-            if (!Settings.saveBackground(this, GAMES[pickingFor][0], data.getData()))
+            if (!AppSettings.saveBackground(this, GAMES[pickingFor][0], data.getData()))
                 status("그림을 읽을 수 없습니다.");
             adapter.notifyDataSetChanged();
             return;
@@ -430,7 +430,7 @@ public class LauncherActivity extends Activity {
         texts.addView(t2);
         row.addView(texts, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         Button bg = new Button(this);
-        boolean hasBg = !Settings.backgroundPath(this, GAMES[pos][0]).isEmpty();
+        boolean hasBg = !AppSettings.backgroundPath(this, GAMES[pos][0]).isEmpty();
         bg.setText(hasBg ? "배경화면 ✓" : "배경화면");
         bg.setFocusable(false);
         bg.setOnClickListener(v -> backgroundMenu(pos));
@@ -440,7 +440,7 @@ public class LauncherActivity extends Activity {
 
     private void backgroundMenu(int game) {
         String id = GAMES[game][0];
-        if (Settings.backgroundPath(this, id).isEmpty()) {
+        if (AppSettings.backgroundPath(this, id).isEmpty()) {
             pickImage(game);
             return;
         }
@@ -450,7 +450,7 @@ public class LauncherActivity extends Activity {
                     if (which == 0) {
                         pickImage(game);
                     } else {
-                        Settings.clearBackground(this, id);
+                        AppSettings.clearBackground(this, id);
                         adapter.notifyDataSetChanged();
                     }
                 })
