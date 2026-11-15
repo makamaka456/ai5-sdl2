@@ -584,12 +584,21 @@ static void android_error_handler(const char *msg)
 	__android_log_print(ANDROID_LOG_ERROR, "ai5", "%s", msg);
 	SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "AI5 오류", msg, NULL);
 }
+
+// exit() runs static destructors while SDL's threads are still running,
+// which aborts the process; end it right away instead (registered last, so
+// it runs first)
+static void android_quick_exit(void)
+{
+	_exit(0);
+}
 #endif
 
 int main(int argc, char *argv[])
 {
 #ifdef __ANDROID__
 	sys_error_handler = android_error_handler;
+	atexit(android_quick_exit);
 #endif
 	saved_argc = argc;
 	saved_argv = argv;

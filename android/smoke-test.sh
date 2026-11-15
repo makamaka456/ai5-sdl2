@@ -6,7 +6,9 @@ APK=$(ls android/app/build/outputs/apk/release/*.apk | head -1)
 PKG=org.ai5sdl2.launcher
 shot() {
 	adb exec-out screencap -p > /tmp/$1.png
-	convert /tmp/$1.png -resize 40% -quality 70 /tmp/$1.jpg 2>/dev/null || cp /tmp/$1.png /tmp/$1.jpg
+}
+print_shot() {
+	convert /tmp/$1.png -resize 360x360 -quality 50 /tmp/$1.jpg 2>/dev/null || cp /tmp/$1.png /tmp/$1.jpg
 	echo "SCREENSHOT-BEGIN $1"
 	base64 -w0 /tmp/$1.jpg
 	echo
@@ -24,5 +26,7 @@ adb shell mkdir -p /sdcard/ai5test
 adb shell am start -n $PKG/.GameActivity --es path /sdcard/ai5test
 sleep 10
 shot game
-adb logcat -d | grep -iE "SDL|ai5|libmain|FATAL|AndroidRuntime|UnsatisfiedLink|DEBUG" | tail -150
+adb logcat -d | grep -E " (SDL|ai5|libc|DEBUG|AndroidRuntime) *:" | grep -v NetworkSecurity | tail -60
+print_shot launcher
+print_shot game
 exit 0
