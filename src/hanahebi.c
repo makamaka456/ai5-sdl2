@@ -295,6 +295,62 @@ static void util_characters_direct(struct param_list *params)
 }
 
 /*
+ * Alpha planes. HH2D.exe surfaces keep an alpha channel (set by 32-bit CGs
+ * and copied by graphics op 8). Our surfaces are 24-bit, so the alpha is kept
+ * here and used when buttons are shown on the overlay.
+ */
+#define SURF_W 640
+#define SURF_H 480
+static uint8_t *alpha_plane[GFX_NR_SURFACES];
+
+static uint8_t *alpha_get(unsigned i)
+{
+	if (i >= GFX_NR_SURFACES)
+		return NULL;
+	if (!alpha_plane[i]) {
+		alpha_plane[i] = xmalloc(SURF_W * SURF_H);
+		memset(alpha_plane[i], 255, SURF_W * SURF_H);
+	}
+	return alpha_plane[i];
+}
+
+static void alpha_clip(int *x, int *y, int *w, int *h)
+{
+	if (*x < 0) { *w += *x; *x = 0; }
+	if (*y < 0) { *h += *y; *y = 0; }
+	if (*x + *w > SURF_W) *w = SURF_W - *x;
+	if (*y + *h > SURF_H) *h = SURF_H - *y;
+}
+
+static void alpha_copy(int sx, int sy, int w, int h, unsigned src, int dx, int dy, unsigned dst)
+{
+	uint8_t *s = alpha_get(src), *d = alpha_get(dst);
+	if (!s || !d || w <= 0 || h <= 0)
+		return;
+	for (int row = 0; row < h; row++) {
+		int ys = sy + row, yd = dy + row;
+		if (ys < 0 || ys >= SURF_H || yd < 0 || yd >= SURF_H)
+			continue;
+		for (int col = 0; col < w; col++) {
+			int xs = sx + col, xd = dx + col;
+			if (xs < 0 || xs >= SURF_W || xd < 0 || xd >= SURF_W)
+				continue;
+			d[yd * SURF_W + xd] = s[ys * SURF_W + xs];
+		}
+	}
+}
+
+static void alpha_fill(int x, int y, int w, int h, unsigned i, uint8_t a)
+{
+	uint8_t *d = alpha_get(i);
+	alpha_clip(&x, &y, &w, &h);
+	if (!d || w <= 0 || h <= 0)
+		return;
+	for (int row = 0; row < h; row++)
+		memset(d + (y + row) * SURF_W + x, a, w);
+}
+
+/*
  * Buttons (Util 200-203): rectangles copied from a surface and shown on top
  * of the screen (overlay 1) until removed. Used by choice menus.
  *   200(x, y, w, h, id)               define button
@@ -315,12 +371,28 @@ static void buttons_redraw(void)
 		if (!buttons[i].defined || !buttons[i].visible)
 			continue;
 		SDL_Surface *src = gfx_get_surface(buttons[i].src);
-		SDL_Rect r = { buttons[i].x, buttons[i].y, buttons[i].w, buttons[i].h };
-		SDL_Rect d = r;
-		SDL_CALL(SDL_SetColorKey, src, SDL_TRUE, SDL_MapRGB(src->format,
-				(mask >> 16) & 0xff, (mask >> 8) & 0xff, mask & 0xff));
-		SDL_CALL(SDL_BlitSurface, src, &r, ov, &d);
-		SDL_CALL(SDL_SetColorKey, src, SDL_FALSE, 0);
+		uint8_t *alpha = alpha_get(buttons[i].src);
+		int x0 = buttons[i].x, y0 = buttons[i].y, w = buttons[i].w, h = buttons[i].h;
+		alpha_clip(&x0, &y0, &w, &h);
+		SDL_LockSurface(src);
+		SDL_LockSurface(ov);
+		for (int y = y0; y < y0 + h; y++) {
+			uint8_t *sp = (uint8_t*)src->pixels + y * src->pitch + x0 * src->format->BytesPerPixel;
+			uint32_t *dp = (uint32_t*)((uint8_t*)ov->pixels + y * ov->pitch) + x0;
+			for (int x = x0; x < x0 + w; x++, sp += src->format->BytesPerPixel, dp++) {
+				uint32_t px = 0;
+				memcpy(&px, sp, src->format->BytesPerPixel);
+				uint8_t r, g, b;
+				SDL_GetRGB(px, src->format, &r, &g, &b);
+				uint8_t a = alpha[y * SURF_W + x];
+				uint32_t m = mask;
+				if (r == ((m >> 16) & 0xff) && g == ((m >> 8) & 0xff) && b == (m & 0xff))
+					a = 0;
+				*dp = SDL_MapRGBA(ov->format, r, g, b, a);
+			}
+		}
+		SDL_UnlockSurface(ov);
+		SDL_UnlockSurface(src);
 		any = true;
 	}
 	if (any)
@@ -485,7 +557,10 @@ static void hanahebi_graphics(struct param_list *params)
 	case 2: // fill rect on dst_surface
 		gfx_fill(sx, sy, w, h, mem_get_sysvar16(mes_sysvar16_dst_surface), fill_color);
 		break;
-	case 8: // copy (TODO: second operation of HH2D.exe 0x43e290)
+	case 8: // copy color and alpha
+		gfx_copy(sx, sy, w, h, src_i, dx, dy, dst_i);
+		alpha_copy(sx, sy, w, h, src_i, dx, dy, dst_i);
+		break;
 	case 0xc:
 		gfx_copy(sx, sy, w, h, src_i, dx, dy, dst_i);
 		break;
@@ -873,9 +948,51 @@ static void hanahebi_voice(struct param_list *params)
 }
 
 // System.function[9](name): load a GCC image into the destination surface
+/*
+ * Our surfaces have no alpha channel. HH2D.exe keeps the alpha of 32-bit CGs
+ * (e.g. sel.gcc, the choice buttons) and blends when drawing; we approximate
+ * this by turning transparent pixels into the mask color (sysvar32[9]), which
+ * copy_masked and the button overlay treat as transparent.
+ */
 static void hanahebi_load_image(struct param_list *params)
 {
-	sys_load_image(params);
+	const char *name = vm_string_param(params, 0);
+	struct cg *cg = asset_cg_load(name);
+	if (!cg) {
+		WARNING("Failed to load CG \"%s\"", name);
+		return;
+	}
+	if (params->nr_params >= 3) {
+		cg->metrics.x = param_or(params, 1, cg->metrics.x);
+		cg->metrics.y = param_or(params, 2, cg->metrics.y);
+	}
+	unsigned dst = mem_get_sysvar16(mes_sysvar16_dst_surface);
+	if (cg->metrics.bpp == 32) {
+		uint32_t mask = mem_get_sysvar32(mes_sysvar32_mask_color);
+		uint8_t *a = alpha_get(dst);
+		uint8_t *p = cg->pixels;
+		for (unsigned y = 0; y < cg->metrics.h; y++) {
+			for (unsigned x = 0; x < cg->metrics.w; x++, p += 4) {
+				int ax = cg->metrics.x + x, ay = cg->metrics.y + y;
+				if (a && ax >= 0 && ax < SURF_W && ay >= 0 && ay < SURF_H)
+					a[ay * SURF_W + ax] = p[3];
+				if (p[3] == 0) {
+					p[0] = (mask >> 16) & 0xff;
+					p[1] = (mask >> 8) & 0xff;
+					p[2] = mask & 0xff;
+				}
+				p[3] = 255;
+			}
+		}
+	} else {
+		alpha_fill(cg->metrics.x, cg->metrics.y, cg->metrics.w, cg->metrics.h, dst, 255);
+	}
+	mem_set_sysvar16(mes_sysvar16_cg_x, cg->metrics.x);
+	mem_set_sysvar16(mes_sysvar16_cg_y, cg->metrics.y);
+	mem_set_sysvar16(mes_sysvar16_cg_w, cg->metrics.w);
+	mem_set_sysvar16(mes_sysvar16_cg_h, cg->metrics.h);
+	gfx_draw_cg(dst, cg);
+	cg_free(cg);
 }
 
 static void hanahebi_mem_restore(void)
