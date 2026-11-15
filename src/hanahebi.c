@@ -829,6 +829,45 @@ static void hanahebi_util(struct param_list *params)
 		mem_set_var16(5, speed[i < 4 ? i : 1]);
 		break;
 	}
+	case 21: { // mask wipe from the back buffer: (21, x, y, w, h, mask no, ?)
+		char name[16];
+		snprintf(name, sizeof(name), "%02u.msk", (unsigned)param_or(params, 5, 0));
+		struct archive_data *msk = asset_data_load(name);
+		if (!msk || msk->size < 640 * 480) {
+			if (msk)
+				archive_data_release(msk);
+			gfx_copy(0, 0, 640, 480, BACK_SURFACE, 0, 0, 0);
+			break;
+		}
+		const char *v = config_ini_get("DispEffect", "Play");
+		int play = v ? atoi(v) : 1;
+		unsigned step = play == 0 ? 8 : play == 1 ? 16 : 32;
+		SDL_Surface *dst = gfx_get_surface(0), *src = gfx_get_surface(BACK_SURFACE);
+		unsigned bpp = dst->format->BytesPerPixel;
+		vm_timer_t timer = vm_timer_create();
+		for (unsigned t = step; t < 256 + step && !input_down(INPUT_CTRL); t += step) {
+			unsigned lo = t - step, hi = min(t, 256u);
+			SDL_LockSurface(dst);
+			SDL_LockSurface(src);
+			for (unsigned y = 0; y < 480; y++) {
+				const uint8_t *m = msk->data + y * 640;
+				uint8_t *d = (uint8_t*)dst->pixels + y * dst->pitch;
+				const uint8_t *sp = (const uint8_t*)src->pixels + y * src->pitch;
+				for (unsigned x = 0; x < 640; x++) {
+					if (m[x] >= lo && m[x] < hi)
+						memcpy(d + x * bpp, sp + x * bpp, bpp);
+				}
+			}
+			SDL_UnlockSurface(src);
+			SDL_UnlockSurface(dst);
+			gfx_dirty(0, 0, 0, 640, 480);
+			vm_peek();
+			vm_timer_tick(&timer, 16);
+		}
+		archive_data_release(msk);
+		gfx_copy(0, 0, 640, 480, BACK_SURFACE, 0, 0, 0);
+		break;
+	}
 	case 2001: { // transition to the back buffer: (2001, 0 = from screen / 1 = from black, n)
 		unsigned n = param_or(params, 2, 30);
 		if (param_or(params, 1, 0) == 1)
