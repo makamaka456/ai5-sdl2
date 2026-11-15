@@ -1722,7 +1722,22 @@ static void hanahebi_util(struct param_list *params)
 	case 1021: // HH2D.exe: clears byte 0x706
 		memory_raw[0x706] = 0;
 		break;
+	case 1000: // create the map (our map needs no setup)
 	case 1009: case 1020: case 1024: case 1025: // no-ops in HH2D.exe
+	case 100: case 111: case 1026: case 1028:  // not handled by HH2D.exe
+	case 66: case 67: // 3D objects (not created in the 2D version)
+		break;
+	case 80: // (80, 0): a "deck" of 10 bytes at 0x2568, count at 0x2572
+		if (param_or(params, 1, 0) == 0) {
+			static const uint8_t deck3[10] = { 1, 1 };
+			static const uint8_t deck4[10] = { 1, 1, 1 };
+			static const uint8_t deck[10] = { 2, 1, 1 };
+			unsigned ch = memory_raw[0x391];
+			memcpy(memory_raw + 0x2568, ch == 3 ? deck3 : ch == 4 ? deck4 : deck, 10);
+			memory_raw[0x2572] = 10;
+		} else {
+			log_unimplemented("Util", 80, params);
+		}
 		break;
 	case 1007: case 1008:
 	case 1010: case 1011: case 1012: case 1013: case 1014: case 1015:
