@@ -153,6 +153,7 @@ static void msgwin_show(void);
 static void msgwin_hide(void);
 static void util_save_screen(unsigned mode);
 static void util_system_menu(void);
+static void util_free_training(struct param_list *params);
 static void msgwin_compose(void);
 static bool msgwin_visible;
 static int msgwin_icon_state;
@@ -1056,6 +1057,9 @@ static void hanahebi_util(struct param_list *params)
 		break;
 	case 21000:
 		util_cg_mode();
+		break;
+	case 20000:
+		util_free_training(params);
 		break;
 	case 23000:
 		util_scene_mode(param_or(params, 1, 0));
@@ -3275,6 +3279,136 @@ static void util_room(struct param_list *params)
 	archive_data_release(dat);
 	if (itm)
 		archive_data_release(itm);
+}
+
+/*
+ * Util 20000: free training (simplified screens; HH2D.exe draws a large
+ * settings screen from om_free_*.gcc).
+ *   (20000, 0, 0): character -> var32[9] = 0..4 (6 = back)
+ *   (20000, 1, c): settings -> heap bytes 0 level (0..2 = 1st..3rd),
+ *                  1 tool (0..9), 2 experience (0..2), 3 minigame auto (0/1),
+ *                  4 (0); var16[18] = 1 start, 0 back to the character list
+ * Choices are limited to scenes that exist (<chr>_<tool><level>01.mes).
+ */
+static const char *ft_chr[5] = { "siz", "kei", "kyo", "mit", "cha" };
+static const char *ft_chr_ko[5] = { "시즈코", "케이코", "쿄코", "미츠코", "체코" };
+static const char *ft_tool[10] = { "vib", "zuiki", "paizuri", "fella", "anal",
+	"nyou", "kanchou", "muchi", "take", "rou" };
+static const char *ft_tool_ko[10] = { "바이브", "토란 줄기 감기", "파이즈리", "펠라치오",
+	"애널 드릴", "이뇨제", "관장", "승마 채찍", "청죽", "촛농" };
+static const char *ft_level[3] = { "1st", "2nd", "3rd" };
+static int ft_sel_tool = -1, ft_sel_level = -1, ft_exp = 0, ft_auto = 0;
+
+static bool ft_scene_exists(int c, int tool, int level)
+{
+	char name[64];
+	if (c == 4)
+		snprintf(name, sizeof(name), "%s_%s01.mes", ft_chr[c], ft_tool[tool]);
+	else
+		snprintf(name, sizeof(name), "%s_%s%s01.mes", ft_chr[c], ft_tool[tool], ft_level[level]);
+	struct archive_data *d = asset_mes_load(name);
+	if (!d)
+		return false;
+	archive_data_release(d);
+	return true;
+}
+
+static bool ft_tool_exists(int c, int tool)
+{
+	for (int l = 0; l < 3; l++) {
+		if (ft_scene_exists(c, tool, l))
+			return true;
+	}
+	return false;
+}
+
+static void util_free_training(struct param_list *params)
+{
+	if (param_or(params, 1, 0) == 0) {
+		const char *items[6];
+		for (int i = 0; i < 5; i++)
+			items[i] = ft_chr_ko[i];
+		items[5] = "돌아가기";
+		int r = choice_run(items, 6);
+		mem_set_var32(9, r < 0 || r == 5 ? 6 : r);
+		ft_sel_tool = ft_sel_level = -1;
+		return;
+	}
+	int c = min(param_or(params, 2, 0), 4u);
+	while (true) {
+		// keep the selection valid
+		if (ft_sel_tool < 0 || !ft_tool_exists(c, ft_sel_tool)) {
+			ft_sel_tool = -1;
+			for (int t = 0; t < 10 && ft_sel_tool < 0; t++) {
+				if (ft_tool_exists(c, t))
+					ft_sel_tool = t;
+			}
+		}
+		if (ft_sel_tool < 0) {
+			mem_set_var16(18, 0);
+			return;
+		}
+		if (c != 4 && (ft_sel_level < 0 || !ft_scene_exists(c, ft_sel_tool, ft_sel_level))) {
+			ft_sel_level = -1;
+			for (int l = 0; l < 3 && ft_sel_level < 0; l++) {
+				if (ft_scene_exists(c, ft_sel_tool, l))
+					ft_sel_level = l;
+			}
+		}
+		static const char *exp_ko[3] = { "처음", "1회 경험", "여러 번 경험" };
+		char l_tool[64], l_level[64], l_exp[64], l_mini[64];
+		snprintf(l_tool, sizeof(l_tool), "%s — 도구: %s", ft_chr_ko[c], ft_tool_ko[ft_sel_tool]);
+		snprintf(l_level, sizeof(l_level), c == 4 ? "단계: (없음)" : "단계: %d단계", ft_sel_level + 1);
+		snprintf(l_exp, sizeof(l_exp), "조교 경험: %s", exp_ko[ft_exp]);
+		snprintf(l_mini, sizeof(l_mini), "미니게임: %s", ft_auto ? "자동" : "수동");
+		const char *items[6] = { l_tool, l_level, l_exp, l_mini, "조교 시작", "인물 바꾸기" };
+		int r = choice_run(items, 6);
+		if (r < 0 || r == 5) {
+			mem_set_var16(18, 0);
+			return;
+		}
+		if (r == 0) {
+			const char *tools[11];
+			int ids[11], n = 0;
+			for (int t = 0; t < 10; t++) {
+				if (ft_tool_exists(c, t)) {
+					ids[n] = t;
+					tools[n++] = ft_tool_ko[t];
+				}
+			}
+			tools[n] = "돌아가기";
+			int t = choice_run(tools, n + 1);
+			if (t >= 0 && t < n)
+				ft_sel_tool = ids[t];
+		} else if (r == 1 && c != 4) {
+			const char *levels[4];
+			int ids[4], n = 0;
+			static const char *level_ko[3] = { "1단계", "2단계", "3단계" };
+			for (int l = 0; l < 3; l++) {
+				if (ft_scene_exists(c, ft_sel_tool, l)) {
+					ids[n] = l;
+					levels[n++] = level_ko[l];
+				}
+			}
+			levels[n] = "돌아가기";
+			int l = choice_run(levels, n + 1);
+			if (l >= 0 && l < n)
+				ft_sel_level = ids[l];
+		} else if (r == 2) {
+			ft_exp = (ft_exp + 1) % 3;
+		} else if (r == 3) {
+			ft_auto = !ft_auto;
+		} else if (r == 4) {
+			uint8_t *heap = memory_raw + mem_get_sysvar16(0);
+			heap[0] = c == 4 ? 0 : ft_sel_level;
+			heap[1] = ft_sel_tool;
+			heap[2] = ft_exp;
+			heap[3] = ft_auto;
+			heap[4] = 0;
+			mem_set_var16(18, 1);
+			return;
+		}
+	}
 }
 
 static void util_save_screen(unsigned mode)
