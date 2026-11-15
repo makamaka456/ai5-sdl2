@@ -866,6 +866,40 @@ static bool map_draw_view(unsigned floor, unsigned variant, unsigned node, unsig
 	return true;
 }
 
+/*
+ * People standing in the corridors (Util 1022 node, id, ...; Util 1023 node,
+ * id removes them). Meeting one returns its id (101..107) from Util 1001;
+ * the original shows them on the walking map, we list them with the rooms.
+ */
+#define MAP_MAX_PEOPLE 16
+static struct { unsigned node, id; } map_people[MAP_MAX_PEOPLE];
+static unsigned map_nr_people = 0;
+
+static void map_place_person(unsigned node, unsigned id)
+{
+	for (unsigned i = 0; i < map_nr_people; i++) {
+		if (map_people[i].id == id) {
+			map_people[i].node = node;
+			return;
+		}
+	}
+	if (map_nr_people < MAP_MAX_PEOPLE) {
+		map_people[map_nr_people].node = node;
+		map_people[map_nr_people].id = id;
+		map_nr_people++;
+	}
+}
+
+static void map_remove_person(unsigned id)
+{
+	for (unsigned i = 0; i < map_nr_people; i++) {
+		if (map_people[i].id == id) {
+			map_people[i] = map_people[--map_nr_people];
+			return;
+		}
+	}
+}
+
 static void util_map_select(void)
 {
 	// show the current view behind the room list
@@ -874,11 +908,22 @@ static void util_map_select(void)
 	if (map_draw_view(0, mem_get_var4(2097), mem_get_var16(10), (dir & 3) * 2, 0))
 		gfx_screen_dirty();
 
-	const char *items[ARRAY_SIZE(map_rooms)];
-	for (unsigned i = 0; i < ARRAY_SIZE(map_rooms); i++)
-		items[i] = map_rooms[i].name;
-	int r = choice_run(items, ARRAY_SIZE(map_rooms));
-	mem_set_var32(12, r < 0 ? 100 : map_rooms[r].id);
+	const char *items[ARRAY_SIZE(map_rooms) + MAP_MAX_PEOPLE];
+	unsigned ids[ARRAY_SIZE(map_rooms) + MAP_MAX_PEOPLE];
+	char labels[MAP_MAX_PEOPLE][48];
+	unsigned n = 0;
+	// people first: meeting them may start an event
+	for (unsigned i = 0; i < map_nr_people; i++) {
+		snprintf(labels[i], sizeof(labels[i]), "복도에 누군가 있다 (%u)", i + 1);
+		items[n] = labels[i];
+		ids[n++] = map_people[i].id;
+	}
+	for (unsigned i = 0; i < ARRAY_SIZE(map_rooms); i++) {
+		items[n] = map_rooms[i].name;
+		ids[n++] = map_rooms[i].id;
+	}
+	int r = choice_run(items, n);
+	mem_set_var32(12, r < 0 ? 100 : ids[r]);
 }
 
 static void hanahebi_util(struct param_list *params)
@@ -1035,6 +1080,16 @@ static void hanahebi_util(struct param_list *params)
 	}
 	case 6: case 10: // system menu closed / redraw menu bar
 	case 1005: case 1006: // map: pause/resume (TODO)
+		break;
+	case 1022: // put a person on the map: (1022, node, id, ...)
+		map_place_person(param_or(params, 1, 0), param_or(params, 2, 0));
+		mem_set_var32(18, 1);
+		break;
+	case 1023: // remove a person: (1023, node, id)
+		map_remove_person(param_or(params, 2, 0));
+		break;
+	case 1100: // map closed
+		map_nr_people = 0;
 		break;
 	case 8: // quit
 		sys_exit(0);
