@@ -11,6 +11,11 @@ on:
       - '.github/workflows/android.yaml'
   workflow_dispatch:
 
+# only build the newest commit of a branch
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   apk:
     runs-on: ubuntu-latest
