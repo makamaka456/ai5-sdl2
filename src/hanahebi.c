@@ -937,7 +937,91 @@ static struct {
 	bool loaded[2];
 	int next[2][MAP_MAX_NODES][4];
 	unsigned floor, node, dir;
+	// examine spots: item table (Util 1019) and the spot areas of the view
+	uint8_t itm[0x30 * 20];
+	bool have_itm;
+	struct archive_data *a6;
+	unsigned a6_node, a6_dir, a6_floor;
 } map;
+
+/*
+ * Examine spots (HH2D.exe 0x4014d0, 0x407560): A00_<point>_<dir*2>.A6 is a
+ * 640x480 byte map of spots (0xff = none) for a view on the 1st floor.
+ * FASmapbase_*syou.itm holds 20 layouts (var4[2097] = rand(20)) of 0x30
+ * bytes: 0xff = spot not usable, 100 = nothing there, else an item number.
+ * Spots need var4[1662] (byte 0x6fe) set. Clicking spot v returns 200 + v;
+ * an item found for the first time sets var32[18] = 1 and var16[8] = item and
+ * marks byte 0x3a0 + v - 1. Spot 22 returns 500.
+ */
+static void map_load_itm(unsigned n)
+{
+	struct archive_data *f = asset_data_load(n == 3 ? "FASmapbase_4syou.itm" : "FASmapbase_5~9syou.itm");
+	if (!f)
+		return;
+	memset(map.itm, 0xff, sizeof(map.itm));
+	memcpy(map.itm, f->data, min(f->size, sizeof(map.itm)));
+	map.have_itm = true;
+	archive_data_release(f);
+}
+
+static const uint8_t *map_spots(void)
+{
+	if (map.floor != 0)
+		return NULL;
+	if (map.a6 && map.a6_node == map.node && map.a6_dir == map.dir && map.a6_floor == map.floor)
+		return map.a6->data;
+	if (map.a6)
+		archive_data_release(map.a6);
+	char name[32];
+	snprintf(name, sizeof(name), "A00_%03u_%02u.A6", map.node, map.dir * 2);
+	map.a6 = asset_data_load(name);
+	if (map.a6 && map.a6->size < 640 * 480) {
+		archive_data_release(map.a6);
+		map.a6 = NULL;
+	}
+	map.a6_node = map.node;
+	map.a6_dir = map.dir;
+	map.a6_floor = map.floor;
+	return map.a6 ? map.a6->data : NULL;
+}
+
+static unsigned map_layout(void)
+{
+	return memory_raw[VAR4_OFF + 2097] % 20;
+}
+
+// spot number (1..) under x,y, or 0
+static unsigned map_spot_at(unsigned x, unsigned y)
+{
+	const uint8_t *a = map_spots();
+	if (!a || !map.have_itm || x >= 640 || y >= 480)
+		return 0;
+	if (!memory_raw[0x6fe] && !getenv("HH_DEBUG_SPOTS"))
+		return 0;
+	unsigned v = a[y * 640 + x];
+	if (v == 0xff || v == 0 || v > 0x30)
+		return 0;
+	if (map.itm[map_layout() * 0x30 + v - 1] == 0xff)
+		return 0;
+	return v;
+}
+
+static unsigned map_examine(unsigned v)
+{
+	unsigned idx = v - 1;
+	memory_raw[0x866] = 0;
+	if (idx == 0x15)
+		return 500;
+	unsigned item = map.itm[map_layout() * 0x30 + idx];
+	if (item != 100 && !memory_raw[0x3a0 + idx] && memory_raw[0x6fe] == 1) {
+		mem_set_var32(18, 1);
+		mem_set_var16(8, item);
+		memory_raw[0x3a0 + idx] = 1;
+	} else {
+		mem_set_var32(18, 0);
+	}
+	return 200 + v;
+}
 
 static bool map_load_graph(unsigned floor)
 {
@@ -1095,10 +1179,28 @@ static void mw_button(SDL_Surface *ov, int id, int hover, const char *label)
 	work_text(b.x + (b.w - (int)text_width(label)) / 2, b.y + (b.h - 20) / 2, label);
 }
 
+#define MW_SPOT 1000
+
 static void map_walk_draw(int hover)
 {
 	SDL_Surface *ov = gfx_get_overlay(2);
 	SDL_CALL(SDL_FillRect, ov, NULL, SDL_MapRGBA(ov->format, 0, 0, 0, 0));
+	// highlight the examine spot under the cursor
+	const uint8_t *spots = map_spots();
+	if (hover > MW_SPOT && spots) {
+		unsigned v = hover - MW_SPOT;
+		SDL_LockSurface(ov);
+		uint32_t c = SDL_MapRGBA(ov->format, 255, 255, 255, 70);
+		for (int y = 0; y < 480; y++) {
+			const uint8_t *m = spots + y * 640;
+			uint32_t *d = (uint32_t*)((uint8_t*)ov->pixels + y * ov->pitch);
+			for (int x = 0; x < 640; x++) {
+				if (m[x] == v)
+					d[x] = c;
+			}
+		}
+		SDL_UnlockSurface(ov);
+	}
 	gfx_fill(0, 0, 640, 480, WORK_SURFACE, 0);
 	gfx_text_set_colors(0, 0xffffff);
 	gfx_text_set_size(18, 0);
@@ -1141,6 +1243,9 @@ static int map_walk_hit(unsigned x, unsigned y)
 		if ((int)x >= r->x && (int)x < r->x + r->w && (int)y >= r->y && (int)y < r->y + r->h)
 			return i;
 	}
+	unsigned v = map_spot_at(x, y);
+	if (v)
+		return MW_SPOT + v;
 	return MW_NONE;
 }
 
@@ -1157,6 +1262,20 @@ static int map_room_list(void)
 static void util_map_select(void)
 {
 	map_state_from_vars();
+	// debugging: HH_MAP_START="point,dir" starts there once
+	static bool start_used = false;
+	const char *st = getenv("HH_MAP_START");
+	if (st && !start_used) {
+		unsigned n, d;
+		if (sscanf(st, "%u,%u", &n, &d) == 2) {
+			map.node = n % MAP_MAX_NODES;
+			map.dir = d & 3;
+		}
+		start_used = true;
+	}
+	// the table is loaded by Util 1019 (not again after loading a save)
+	if (!map.have_itm)
+		map_load_itm(0);
 	if (!map_load_graph(map.floor)) {
 		// no graph: fall back to the room list
 		int room = map_room_list();
@@ -1234,8 +1353,12 @@ static void util_map_select(void)
 				result = map_people[i].id;
 			break;
 		}
+		default:
+			if (action > MW_SPOT)
+				result = map_examine(action - MW_SPOT);
+			break;
 		}
-		if (action != MW_NONE) {
+		if (action != MW_NONE && action < MW_SPOT) {
 			last = -2;
 			// keep moving while an arrow key is held (with a short pause)
 			vm_delay(action == MW_LEFT || action == MW_RIGHT ? 120 : 90);
@@ -1460,6 +1583,9 @@ static void hanahebi_util(struct param_list *params)
 		break;
 	case 1100: // map closed
 		map_nr_people = 0;
+		break;
+	case 1019: // examine spot items: (1019, n) 3 = chapter 4 table
+		map_load_itm(param_or(params, 1, 0));
 		break;
 	case 1010: case 1011: case 1012: case 1013: case 1014: case 1015:
 	case 1017: case 1018:
