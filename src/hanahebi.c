@@ -903,30 +903,397 @@ static void map_remove_person(unsigned id)
 	}
 }
 
+/*
+ * Walking map (HH2D.exe 0x407f40). The house is a graph of points
+ * (MAPF.TBL 1st floor, MAPB.TBL basement: u32 count + {u32 no, s32 next[4]},
+ * -1 = none). Directions 0..3 (0 = +z, 1 = -x, 2 = -z, 3 = +x); the view
+ * from a point is F00_<point>_<dir*2>.map, odd numbers are the half-turn
+ * frames. Up = forward, down = back (facing the same way), right = dir - 1,
+ * left = dir + 1. Walking forward into a door enters the room (the door
+ * table below, HH2D.exe 0x4ef2c0). The direction is stored in var16[3] with
+ * 1 and 3 swapped and the point in var16[15].
+ *
+ * The original also shows a floor plan to click rooms on (it then walks
+ * there by itself); we offer the room list for that ([방 목록]).
+ */
+struct map_door { int node, room, dir; };
+static const struct map_door map_doors[2][21] = {
+	{
+		{ 69,  1, 0 }, { 83,  2, 0 }, { 43,  3, 3 }, { 79,  4, 1 }, { 53,  5, 2 },
+		{ 66,  6, 2 }, { 65,  7, 2 }, { 77,  8, 1 }, { 77,  9, 3 }, { 47, 10, 1 },
+		{ 27, 11, 0 }, { 59, 12, 1 }, { 30, 13, 0 }, { 48, 14, 1 }, {  0, 15, 0 },
+		{ 40, 16, 0 }, { 58, 17, 2 }, { 83, 18, 3 }, { 40, 21, 0 }, { 40, 21, 0 },
+		{ 40, 21, 0 },
+	},
+	{
+		{ 10, 19, 1 }, { 12, 20, 3 }, {  0, 21, 0 }, { 17, 22, 0 },
+		{ -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 },
+		{ -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 },
+	},
+};
+
+#define MAP_MAX_NODES 128
+static struct {
+	bool loaded[2];
+	int next[2][MAP_MAX_NODES][4];
+	unsigned floor, node, dir;
+} map;
+
+static bool map_load_graph(unsigned floor)
+{
+	if (map.loaded[floor])
+		return true;
+	struct archive_data *f = asset_data_load(floor ? "MAPB.TBL" : "MAPF.TBL");
+	if (!f)
+		return false;
+	for (unsigned i = 0; i < MAP_MAX_NODES; i++)
+		for (unsigned d = 0; d < 4; d++)
+			map.next[floor][i][d] = -1;
+	unsigned n = f->size >= 4 ? le_get32(f->data, 0) : 0;
+	for (unsigned i = 0; i < n && 4 + (i + 1) * 20 <= f->size; i++) {
+		unsigned no = le_get32(f->data, 4 + i * 20);
+		if (no >= MAP_MAX_NODES)
+			continue;
+		for (unsigned d = 0; d < 4; d++)
+			map.next[floor][no][d] = (int32_t)le_get32(f->data, 4 + i * 20 + 4 + d * 4);
+	}
+	archive_data_release(f);
+	map.loaded[floor] = true;
+	return true;
+}
+
+// state from the script variables (after loading a save, etc.)
+static void map_state_from_vars(void)
+{
+	unsigned d = mem_get_var16(3);
+	if (d == 1) d = 3; else if (d == 3) d = 1;
+	map.dir = d & 3;
+	map.node = mem_get_var16(15) % MAP_MAX_NODES;
+}
+
+static void map_state_to_vars(void)
+{
+	unsigned d = map.dir;
+	if (d == 1) d = 3; else if (d == 3) d = 1;
+	mem_set_var16(3, d);
+	mem_set_var16(15, map.node);
+}
+
+// the view variant: var4[2097] (+20 from chapter 5, 40 before chapter 4)
+static unsigned map_variant(void)
+{
+	unsigned v = mem_get_var4(2097);
+	unsigned ch = mem_get_var4(785);
+	if (ch < 4)
+		v = 40;
+	else if (ch >= 5)
+		v += 20;
+	return v;
+}
+
+static bool map_show(unsigned frame)
+{
+	if (getenv("HH_DEBUG_UTIL"))
+		NOTICE("map: floor %u node %u dir %u frame %u", map.floor, map.node, map.dir, frame);
+	return map_draw_view(map.floor, map_variant(), map.node, frame, 0);
+}
+
+static const struct map_door *map_door_ahead(void)
+{
+	for (unsigned i = 0; i < 21; i++) {
+		const struct map_door *d = &map_doors[map.floor][i];
+		if (d->node < 0)
+			break;
+		if (d->node == (int)map.node && d->dir == (int)map.dir) {
+			// room 18 (조교실) only once it is known (HH2D.exe 0x401350)
+			if (d->room == 18 && !memory_raw[0x552])
+				continue;
+			return d;
+		}
+	}
+	return NULL;
+}
+
+static const char *map_room_name(int room)
+{
+	for (unsigned i = 0; i < ARRAY_SIZE(map_rooms); i++) {
+		if ((int)map_rooms[i].id == room)
+			return map_rooms[i].name;
+	}
+	return NULL;
+}
+
+static void map_footstep(void)
+{
+	static unsigned n = 0;
+	static const char *steps[] = { "hh_179.wav", "hh_180.wav", "hh_181.wav" };
+	audio_se_play(steps[n++ % 3], 2);
+}
+
+static bool map_turn(int delta)
+{
+	unsigned old = map.dir;
+	map.dir = (map.dir + 4 + delta) & 3;
+	// half-turn frame between the two directions
+	unsigned half = (delta < 0 ? map.dir : old) * 2 + 1;
+	if (map_show(half)) {
+		gfx_screen_dirty();
+		vm_peek();
+		vm_delay(70);
+	}
+	map_show(map.dir * 2);
+	gfx_screen_dirty();
+	return true;
+}
+
+// 1 = moved, 0 = blocked, -1 = walked into a door (room in *room)
+static int map_step(bool back, int *room)
+{
+	if (!back) {
+		const struct map_door *d = map_door_ahead();
+		if (d) {
+			*room = d->room;
+			return -1;
+		}
+	}
+	int next = map.next[map.floor][map.node][back ? (map.dir + 2) & 3 : map.dir];
+	if (next < 0 || next >= MAP_MAX_NODES)
+		return 0;
+	map.node = next;
+	map_footstep();
+	map_show(map.dir * 2);
+	gfx_screen_dirty();
+	return 1;
+}
+
+// on-screen controls (overlay 2)
+enum { MW_NONE = -1, MW_FWD, MW_BACK, MW_LEFT, MW_RIGHT, MW_LIST, MW_PERSON, MW_NR };
+static const SDL_Rect mw_rects[MW_NR] = {
+	[MW_FWD]    = { 532, 326, 52, 46 },
+	[MW_BACK]   = { 532, 426, 52, 46 },
+	[MW_LEFT]   = { 476, 376, 52, 46 },
+	[MW_RIGHT]  = { 588, 376, 48, 46 },
+	[MW_LIST]   = { 8, 430, 120, 42 },
+	[MW_PERSON] = { 220, 400, 200, 46 },
+};
+
+static int map_person_here(void)
+{
+	for (unsigned i = 0; i < map_nr_people; i++) {
+		if (map_people[i].node == map.node)
+			return i;
+	}
+	return -1;
+}
+
+static void mw_button(SDL_Surface *ov, int id, int hover, const char *label)
+{
+	SDL_Rect b = mw_rects[id];
+	SDL_Rect in = { b.x + 2, b.y + 2, b.w - 4, b.h - 4 };
+	SDL_CALL(SDL_FillRect, ov, &b, SDL_MapRGBA(ov->format, hover == id ? 240 : 170, 40, 40, 230));
+	SDL_CALL(SDL_FillRect, ov, &in, SDL_MapRGBA(ov->format, hover == id ? 120 : 30, 10, 10, 200));
+	work_text(b.x + (b.w - (int)text_width(label)) / 2, b.y + (b.h - 20) / 2, label);
+}
+
+static void map_walk_draw(int hover)
+{
+	SDL_Surface *ov = gfx_get_overlay(2);
+	SDL_CALL(SDL_FillRect, ov, NULL, SDL_MapRGBA(ov->format, 0, 0, 0, 0));
+	gfx_fill(0, 0, 640, 480, WORK_SURFACE, 0);
+	gfx_text_set_colors(0, 0xffffff);
+	gfx_text_set_size(18, 0);
+
+	const struct map_door *d = map_door_ahead();
+	bool fwd = d || map.next[map.floor][map.node][map.dir] >= 0;
+	bool back = map.next[map.floor][map.node][(map.dir + 2) & 3] >= 0;
+	mw_button(ov, MW_FWD, hover, fwd ? "▲" : "·");
+	mw_button(ov, MW_BACK, hover, back ? "▼" : "·");
+	mw_button(ov, MW_LEFT, hover, "◀");
+	mw_button(ov, MW_RIGHT, hover, "▶");
+	mw_button(ov, MW_LIST, hover, "방 목록");
+	if (map_person_here() >= 0)
+		mw_button(ov, MW_PERSON, hover, "누군가 있다");
+
+	// the room in front
+	if (d) {
+		const char *name = map_room_name(d->room);
+		char text[64];
+		snprintf(text, sizeof(text), "앞에 문: %s  (▲ 들어가기)", name ? name : "?");
+		SDL_Rect r = { 8, 8, (int)text_width(text) + 20, 34 };
+		SDL_CALL(SDL_FillRect, ov, &r, SDL_MapRGBA(ov->format, 0, 0, 0, 170));
+		work_text(18, 15, text);
+	}
+
+	SDL_Surface *ts = gfx_get_surface(WORK_SURFACE);
+	SDL_CALL(SDL_SetColorKey, ts, SDL_TRUE, SDL_MapRGB(ts->format, 0, 0, 0));
+	SDL_CALL(SDL_BlitSurface, ts, NULL, ov, NULL);
+	SDL_CALL(SDL_SetColorKey, ts, SDL_FALSE, 0);
+	gfx_overlay_enable(2);
+	gfx_screen_dirty();
+}
+
+static int map_walk_hit(unsigned x, unsigned y)
+{
+	for (int i = 0; i < MW_NR; i++) {
+		if (i == MW_PERSON && map_person_here() < 0)
+			continue;
+		const SDL_Rect *r = &mw_rects[i];
+		if ((int)x >= r->x && (int)x < r->x + r->w && (int)y >= r->y && (int)y < r->y + r->h)
+			return i;
+	}
+	return MW_NONE;
+}
+
+// the room list (stands in for clicking a room on the floor plan)
+static int map_room_list(void)
+{
+	const char *items[ARRAY_SIZE(map_rooms)];
+	for (unsigned i = 0; i < ARRAY_SIZE(map_rooms); i++)
+		items[i] = map_rooms[i].name;
+	int r = choice_run(items, ARRAY_SIZE(map_rooms));
+	return r < 0 ? -1 : (int)map_rooms[r].id;
+}
+
 static void util_map_select(void)
 {
-	// show the current view behind the room list
-	unsigned dir = mem_get_var16(3);
-	if (dir == 1) dir = 3; else if (dir == 3) dir = 1; // see HH2D.exe 0x407f40
-	if (map_draw_view(0, mem_get_var4(2097), mem_get_var16(10), (dir & 3) * 2, 0))
-		gfx_screen_dirty();
+	map_state_from_vars();
+	if (!map_load_graph(map.floor)) {
+		// no graph: fall back to the room list
+		int room = map_room_list();
+		mem_set_var32(12, room < 0 ? 100 : room);
+		return;
+	}
+	map_show(map.dir * 2);
+	gfx_screen_dirty();
 
-	const char *items[ARRAY_SIZE(map_rooms) + MAP_MAX_PEOPLE];
-	unsigned ids[ARRAY_SIZE(map_rooms) + MAP_MAX_PEOPLE];
-	char labels[MAP_MAX_PEOPLE][48];
-	unsigned n = 0;
-	// people first: meeting them may start an event
-	for (unsigned i = 0; i < map_nr_people; i++) {
-		snprintf(labels[i], sizeof(labels[i]), "복도에 누군가 있다 (%u)", i + 1);
-		items[n] = labels[i];
-		ids[n++] = map_people[i].id;
+	int result = -1, hover = MW_NONE, last = -2;
+	input_wait_until_up(INPUT_ACTIVATE);
+	input_wait_until_up(INPUT_CANCEL);
+	while (result < 0) {
+		unsigned cx, cy;
+		cursor_get_pos(&cx, &cy);
+		hover = map_walk_hit(cx, cy);
+		if (hover != last) {
+			map_walk_draw(hover);
+			last = hover;
+		}
+		int action = MW_NONE;
+		if (input_down(INPUT_CANCEL)) {
+			input_wait_until_up(INPUT_CANCEL);
+			result = 100;
+			break;
+		} else if (input_down(INPUT_UP)) {
+			action = MW_FWD;
+		} else if (input_down(INPUT_DOWN)) {
+			action = MW_BACK;
+		} else if (input_down(INPUT_LEFT)) {
+			action = MW_LEFT;
+		} else if (input_down(INPUT_RIGHT)) {
+			action = MW_RIGHT;
+		} else if (input_down(INPUT_ACTIVATE)) {
+			cursor_get_pos(&cx, &cy);
+			action = map_walk_hit(cx, cy);
+			input_wait_until_up(INPUT_ACTIVATE);
+		}
+		int room = 0;
+		switch (action) {
+		case MW_FWD:
+			if (map_step(false, &room) < 0)
+				result = room;
+			break;
+		case MW_BACK:
+			map_step(true, &room);
+			break;
+		case MW_LEFT:
+			map_turn(1);
+			break;
+		case MW_RIGHT:
+			map_turn(-1);
+			break;
+		case MW_LIST:
+			gfx_overlay_disable(2);
+			room = map_room_list();
+			if (room > 0) {
+				// stand at its door, as the original does after walking there
+				for (unsigned f = 0; f < 2; f++) {
+					for (unsigned i = 0; i < 21; i++) {
+						if (map_doors[f][i].room == room && f == map.floor) {
+							map.node = map_doors[f][i].node;
+							map.dir = map_doors[f][i].dir;
+							break;
+						}
+					}
+				}
+				result = room;
+			}
+			map_show(map.dir * 2);
+			break;
+		case MW_PERSON: {
+			int i = map_person_here();
+			if (i >= 0)
+				result = map_people[i].id;
+			break;
+		}
+		}
+		if (action != MW_NONE) {
+			last = -2;
+			// keep moving while an arrow key is held (with a short pause)
+			vm_delay(action == MW_LEFT || action == MW_RIGHT ? 120 : 90);
+		}
+		vm_peek();
+		vm_delay(16);
 	}
-	for (unsigned i = 0; i < ARRAY_SIZE(map_rooms); i++) {
-		items[n] = map_rooms[i].name;
-		ids[n++] = map_rooms[i].id;
+	gfx_overlay_disable(2);
+	gfx_screen_dirty();
+	map_state_to_vars();
+	mem_set_var32(12, result);
+}
+
+/*
+ * Map commands used by the scripts (HH2D.exe Util 1010-1018):
+ *   1010/1011 1st floor / basement, 1012 n forward, 1013 n back,
+ *   1014 n turn right, 1015 n turn left, 1017 (point, ?) go to a point,
+ *   1018 (door index, ?) stand at a door.
+ */
+static void util_map_command(unsigned no, struct param_list *params)
+{
+	map_state_from_vars();
+	int room;
+	unsigned n = param_or(params, 1, 1);
+	switch (no) {
+	case 1010: map.floor = 0; break;
+	case 1011: map.floor = 1; break;
+	case 1012:
+		map_load_graph(map.floor);
+		for (unsigned i = 0; i < n; i++)
+			map_step(false, &room);
+		break;
+	case 1013:
+		map_load_graph(map.floor);
+		for (unsigned i = 0; i < n; i++)
+			map_step(true, &room);
+		break;
+	case 1014:
+		for (unsigned i = 0; i < n; i++)
+			map_turn(-1);
+		break;
+	case 1015:
+		for (unsigned i = 0; i < n; i++)
+			map_turn(1);
+		break;
+	case 1017:
+		map.node = param_or(params, 1, 0) % MAP_MAX_NODES;
+		break;
+	case 1018: {
+		unsigned i = param_or(params, 1, 0);
+		if (i < 21 && map_doors[map.floor][i].node >= 0) {
+			map.node = map_doors[map.floor][i].node;
+			map.dir = map_doors[map.floor][i].dir;
+		}
+		break;
 	}
-	int r = choice_run(items, n);
-	mem_set_var32(12, r < 0 ? 100 : ids[r]);
+	}
+	map_state_to_vars();
 }
 
 static void hanahebi_util(struct param_list *params)
@@ -1093,6 +1460,10 @@ static void hanahebi_util(struct param_list *params)
 		break;
 	case 1100: // map closed
 		map_nr_people = 0;
+		break;
+	case 1010: case 1011: case 1012: case 1013: case 1014: case 1015:
+	case 1017: case 1018:
+		util_map_command(vm_expr_param(params, 0), params);
 		break;
 	case 8: // quit
 		sys_exit(0);
