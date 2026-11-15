@@ -1543,6 +1543,75 @@ static void util_map_command(unsigned no, struct param_list *params)
 	map_state_to_vars();
 }
 
+/*
+ * Util 8000: tools (items).
+ *   (8000, 1, tool, grade): "got a tool" (after Util 80(1) drew the grade).
+ *     item_get.gcc: frame at (0,0,415,128), icons 92x92 at
+ *     (tool * 92, 132 + grade * 92); tools: anal drill, zuiki, vibrator,
+ *     riding whip, bamboo, candle, diuretic, enema; grades 2nd/1st/special.
+ *   (8000, 0, ...) tool selection and (8000, 2) the tool list are screens of
+ *   their own in HH2D.exe (item_sel.gcc) - not done yet.
+ */
+static const char *item_names[8] = { "애널 드릴", "토란 줄기", "바이브", "승마 채찍",
+	"청죽", "양초", "이뇨제", "관장기" };
+static const char *item_grades[3] = { "2급", "1급", "특급" };
+
+static void util_item_get(unsigned tool, unsigned grade)
+{
+	struct cg *cg = hh_cg_load("item_get.gcc");
+	SDL_Surface *ov = gfx_get_overlay(2);
+	SDL_CALL(SDL_FillRect, ov, NULL, SDL_MapRGBA(ov->format, 0, 0, 0, 120));
+	const int px = 112, py = 176;
+	if (cg && !cg->palette && cg->metrics.bpp != 8 && cg->metrics.h >= 408) {
+		SDL_Surface *tmp = SDL_CreateRGBSurfaceWithFormatFrom(cg->pixels, cg->metrics.w,
+				cg->metrics.h, 32, cg->metrics.w * 4, SDL_PIXELFORMAT_RGBA32);
+		SDL_SetSurfaceBlendMode(tmp, SDL_BLENDMODE_BLEND);
+		SDL_Rect fsrc = { 0, 0, 415, 128 }, fdst = { px, py, 415, 128 };
+		SDL_BlitSurface(tmp, &fsrc, ov, &fdst);
+		if (tool < 8 && grade < 3) {
+			SDL_Rect isrc = { tool * 92, 132 + grade * 92, 92, 92 };
+			SDL_Rect idst = { px + 20, py + 18, 92, 92 };
+			SDL_BlitSurface(tmp, &isrc, ov, &idst);
+		}
+		SDL_FreeSurface(tmp);
+	} else {
+		SDL_Rect r = { px, py, 415, 128 };
+		SDL_CALL(SDL_FillRect, ov, &r, SDL_MapRGBA(ov->format, 60, 0, 0, 230));
+	}
+	if (cg)
+		cg_free(cg);
+
+	gfx_fill(0, 0, 640, 480, WORK_SURFACE, 0);
+	gfx_text_set_colors(0, 0xffffff);
+	gfx_text_set_size(20, 0);
+	char line[64];
+	if (tool < 8)
+		snprintf(line, sizeof(line), "%s (%s)", item_names[tool], grade < 3 ? item_grades[grade] : "?");
+	else
+		snprintf(line, sizeof(line), "도구 %u", tool);
+	work_text(px + 130, py + 36, line);
+	gfx_text_set_size(18, 0);
+	work_text(px + 130, py + 74, "도구를 손에 넣었다.");
+	SDL_Surface *ts = gfx_get_surface(WORK_SURFACE);
+	SDL_Rect area = { px, py, 415, 128 };
+	SDL_CALL(SDL_SetColorKey, ts, SDL_TRUE, SDL_MapRGB(ts->format, 0, 0, 0));
+	SDL_CALL(SDL_BlitSurface, ts, &area, ov, &area);
+	SDL_CALL(SDL_SetColorKey, ts, SDL_FALSE, 0);
+	gfx_overlay_enable(2);
+	gfx_screen_dirty();
+
+	input_wait_until_up(INPUT_ACTIVATE);
+	input_wait_until_up(INPUT_CANCEL);
+	while (!input_down(INPUT_ACTIVATE) && !input_down(INPUT_CANCEL) && !input_down(INPUT_CTRL)) {
+		vm_peek();
+		vm_delay(16);
+	}
+	input_wait_until_up(INPUT_ACTIVATE);
+	input_wait_until_up(INPUT_CANCEL);
+	gfx_overlay_disable(2);
+	gfx_screen_dirty();
+}
+
 static void hanahebi_util(struct param_list *params)
 {
 	if (getenv("HH_DEBUG_UTIL") && vm_expr_param(params, 0) != 9000 && vm_expr_param(params, 0) != 504) {
@@ -1750,6 +1819,12 @@ static void hanahebi_util(struct param_list *params)
 		}
 		// (80, 2): the original rebuilds its list from 0x2568; ours lives there
 		break;
+	case 8000:
+		if (param_or(params, 1, 0) == 1)
+			util_item_get(param_or(params, 2, 0), param_or(params, 3, 0));
+		else
+			log_unimplemented("Util", 8000, params);
+		break;
 	case 81: { // var16[8] = 0/1/2 with chance var4[2098] (byte 0x8b2) (HH2D.exe 0x423543)
 		unsigned v = memory_raw[0x8b2], ch = memory_raw[0x391];
 		unsigned r;
@@ -1783,6 +1858,13 @@ static void hanahebi_util(struct param_list *params)
 		util_backlog_view();
 		break;
 	case 11000:
+		if (getenv("HH_DEBUG_ITEM")) {
+			static bool shown = false;
+			unsigned t, g;
+			if (!shown && sscanf(getenv("HH_DEBUG_ITEM"), "%u,%u", &t, &g) == 2)
+				util_item_get(t, g);
+			shown = true;
+		}
 		util_title_menu(param_or(params, 1, 0));
 		break;
 	case 24000:
