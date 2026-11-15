@@ -24,9 +24,14 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <time.h>
+#include <sys/stat.h>
 
 #include "nulib.h"
 #include "nulib/little_endian.h"
+#include "nulib/file.h"
+#include "savedata.h"
 #include "ai5/arc.h"
 #include "ai5/cg.h"
 #include "ai5/game.h"
@@ -91,6 +96,24 @@ static uint32_t param_or(struct param_list *params, unsigned i, uint32_t def)
 	return params->params[i].val;
 }
 
+/*
+ * A name parameter. Scripts pass "" plus a memory address (e.g. System.cg_offset,
+ * filled by System.function[24](6)) when the name comes from a screen record.
+ */
+static const char *name_param(struct param_list *params, unsigned i, unsigned ptr_i)
+{
+	const char *s = "";
+	if (i < params->nr_params && params->params[i].type == MES_PARAM_STRING)
+		s = params->params[i].str;
+	if (s[0] || ptr_i >= params->nr_params
+			|| params->params[ptr_i].type != MES_PARAM_EXPRESSION)
+		return s;
+	uint32_t off = params->params[ptr_i].val;
+	if (off >= sizeof(struct memory) - 32)
+		return s;
+	return (const char*)memory_raw + off;
+}
+
 // results of system calls are returned in var32[18] (mem16 + 0x2134)
 static void set_result(uint32_t v)
 {
@@ -127,15 +150,17 @@ static void log_unimplemented(const char *what, unsigned no, struct param_list *
 
 static void msgwin_show(void);
 static void msgwin_hide(void);
+static void util_save_screen(unsigned mode);
+static void util_system_menu(void);
 
 #define SYS_STUB(n) \
 	static void sys_stub_##n(struct param_list *params) \
 	{ \
 		log_unimplemented("System.function", n, params); \
 	}
-SYS_STUB(3) SYS_STUB(4)
+SYS_STUB(3)
 
-SYS_STUB(23) SYS_STUB(24) SYS_STUB(26) SYS_STUB(28)
+SYS_STUB(23) SYS_STUB(28)
 
 /*
  * Character sprites (Util 50, HH2D.exe 0x429xxx/0x42axxx).
@@ -245,7 +270,7 @@ static void util_characters(struct param_list *params)
 			char_unload(i);
 		break;
 	case 1: // load (1, name, slot)
-		char_load(vm_string_param(params, 2), param_or(params, 3, 0));
+		char_load(name_param(params, 2, 4), param_or(params, 3, 0));
 		break;
 	case 2: // remove (2, slot)
 		char_unload(param_or(params, 2, 0));
@@ -273,7 +298,7 @@ static void util_characters(struct param_list *params)
 		unsigned slot = param_or(params, 4, 0);
 		if (slot >= NR_CHAR_SLOTS || !char_cg[slot])
 			break;
-		struct cg *face = char_load_cg(vm_string_param(params, 3), slot);
+		struct cg *face = char_load_cg(name_param(params, 3, 5), slot);
 		if (face) {
 			char_unload_face(slot);
 			char_face[slot] = face;
@@ -313,7 +338,7 @@ static void util_characters_direct(struct param_list *params)
 	case 0:
 	case 1: {
 		unsigned slot = param_or(params, 3, 0);
-		struct cg *cg = char_load_cg(vm_string_param(params, 2), slot);
+		struct cg *cg = char_load_cg(name_param(params, 2, 4), slot);
 		if (!cg)
 			break;
 		if (direct_cg[slot]) {
@@ -625,10 +650,20 @@ static int choice_run(const char **items, unsigned n)
 			choice_draw(&l, items, hover);
 			last = hover;
 		}
-		if (input_down(INPUT_ACTIVATE) && hover >= 0) {
-			input_wait_until_up(INPUT_ACTIVATE);
-			result = hover;
-			break;
+		if (input_down(INPUT_ACTIVATE)) {
+			// the click may come with a mouse move: use the current position
+			cursor_get_pos(&cx, &cy);
+			for (unsigned i = 0; i < n; i++) {
+				SDL_Rect r;
+				choice_rect(&l, i, &r);
+				if ((int)cx >= r.x && (int)cx < r.x + r.w && (int)cy >= r.y && (int)cy < r.y + r.h)
+					hover = i;
+			}
+			if (hover >= 0) {
+				input_wait_until_up(INPUT_ACTIVATE);
+				result = hover;
+				break;
+			}
 		}
 		if (input_down(INPUT_CANCEL)) {
 			input_wait_until_up(INPUT_CANCEL);
@@ -786,6 +821,22 @@ static void hanahebi_util(struct param_list *params)
 		mem_set_var16(5, speed[i < 4 ? i : 1]);
 		break;
 	}
+	case 5:
+		util_system_menu();
+		break;
+	case 6: case 10: // system menu closed / redraw menu bar
+	case 1005: case 1006: // map: pause/resume (TODO)
+		break;
+	case 8: // quit
+		sys_exit(0);
+		break;
+	case 9: // back to the title screen
+		vm_load_mes("main.mes");
+		vm_flag_on(FLAG_RETURN);
+		break;
+	case 12:
+		util_save_screen(param_or(params, 1, 2));
+		break;
 	case 502: msgwin_show(); break;
 	case 503: msgwin_hide(); break;
 	default:
@@ -1295,7 +1346,7 @@ static void hanahebi_present(struct param_list *params)
  */
 static void hanahebi_load_image(struct param_list *params)
 {
-	const char *name = vm_string_param(params, 0);
+	const char *name = name_param(params, 0, 3);
 	if (getenv("HH_DEBUG_UTIL"))
 		NOTICE("load_image(\"%s\") -> %u", name, mem_get_sysvar16(mes_sysvar16_dst_surface));
 	struct cg *cg = hh_cg_load(name);
@@ -1336,11 +1387,629 @@ static void hanahebi_load_image(struct param_list *params)
 	cg_free(cg);
 }
 
+static void hanahebi_mem_restore(void);
+
+/*
+ * Save data (HH2D.exe, folder SAVEHANAHEBI):
+ *   FLAG%03u        mem16 (0x4000 bytes); FLAG000 holds the global variables
+ *   SaveData%03u.dat screen records (System.function[24]) at the last save point
+ *   MesSkip.dat     "already read" bits (System.function[26])
+ *
+ * Save points: statement 0x17 n sets sysvar32[8] = n; after loading, the MES
+ * file is restarted and (seeing var4[4002] == 1) redraws the screen from the
+ * screen records and jumps with statement 0x18 to address table[sysvar32[8]].
+ */
+#define SAVE_DIR "SAVEHANAHEBI"
+#define SV32_SAVE_POINT 8
+
+static const char *save_path(const char *fmt, unsigned no)
+{
+	static char dir[1024] = "";
+	static char path[1100];
+	if (!dir[0]) {
+		char *d = path_get_icase(SAVE_DIR);
+		if (!d) {
+			if (mkdir_p(SAVE_DIR))
+				WARNING("hanahebi: cannot create " SAVE_DIR);
+			d = strdup(SAVE_DIR);
+		}
+		snprintf(dir, sizeof(dir), "%s", d);
+		free(d);
+	}
+	char name[64];
+	snprintf(name, sizeof(name), fmt, no);
+	snprintf(path, sizeof(path), "%s/%s", dir, name);
+	return path;
+}
+
+static const char *flag_file(unsigned no)
+{
+	return save_path("FLAG%03u", no);
+}
+
+static void hh_stmt_save_point(void)
+{
+	uint32_t n = le_get32(vm.ip.code, vm.ip.ptr);
+	vm.ip.ptr += 4;
+	mem_set_sysvar32(SV32_SAVE_POINT, n);
+	void screen_records_snapshot(void);
+	screen_records_snapshot();
+}
+
+static void hh_stmt_jump_save_point(void)
+{
+	uint32_t n = vm_eval();
+	if (n >= vm_mes_table_size) {
+		WARNING("hanahebi: invalid save point %u", n);
+		return;
+	}
+	vm.ip.ptr = vm_mes_table[n];
+}
+
+static void hh_resume_load(unsigned no)
+{
+	uint8_t *mem = memory_raw;
+	uint8_t global[VAR4_OFF + VAR4_SIZE];
+	savedata_read(flag_file(no), mem, 0, ARGS_OFF);
+	savedata_read(flag_file(0), global, VAR4_OFF, VAR4_SIZE);
+	uint8_t *var4 = mem + VAR4_OFF, *gvar4 = global + VAR4_OFF;
+	// system variables (var4[3000..]) come from the global file, except these
+	uint8_t keep4002 = var4[4002], keep4210 = var4[4210], keep4251 = var4[4251];
+	memcpy(var4 + 3000, gvar4 + 3000, VAR4_SIZE - 3000);
+	var4[4002] = keep4002;
+	var4[4210] = keep4210;
+	var4[4251] = keep4251;
+	var4[4010] = 0; var4[4003] = 0; var4[4090] = 0; var4[4091] = 0xff;
+	var4[4092] = 0; var4[4121] = 0; var4[4122] = 0; var4[4096] = 0;
+	var4[4510] = 0; var4[4013] = 1;
+	hanahebi_mem_restore();
+	uint16_t flags = mem_get_sysvar16(mes_sysvar16_flags);
+	mem_set_sysvar16(mes_sysvar16_flags, (flags | 0x8) & 0x7fff);
+	vm_load_mes(mem_mes_name());
+	vm_flag_on(FLAG_RETURN);
+}
+
+// System.function[4](3, slot): merge var4 into a save file
+static void hh_save_union_var4(unsigned no)
+{
+	uint8_t buf[VAR4_OFF + VAR4_SIZE];
+	memset(buf, 0, sizeof(buf));
+	savedata_read(flag_file(no), buf, 0, sizeof(buf));
+	uint8_t *f = buf + VAR4_OFF, *v = memory_raw + VAR4_OFF;
+	for (unsigned i = 0; i < VAR4_SIZE; i++) {
+		if (i == 4250)
+			f[i] = v[i];
+		else if (i < 5000)
+			f[i] = max(f[i], v[i]);
+		else if (v[i])
+			f[i] = v[i];
+	}
+	savedata_write(flag_file(no), buf, VAR4_OFF, VAR4_SIZE);
+}
+
+static void hanahebi_savedata(struct param_list *params)
+{
+	unsigned no = param_or(params, 1, 0);
+	unsigned start = param_or(params, 2, 0), count = param_or(params, 3, 0);
+	switch (param_or(params, 0, 0)) {
+	case 0: hh_resume_load(no); break;
+	case 1: savedata_write(flag_file(no), memory_raw, 0, ARGS_OFF); break;
+	case 2: // load var4
+		savedata_read(flag_file(no), memory_raw, VAR4_OFF, VAR4_SIZE);
+		mem_set_var4(4013, 1);
+		break;
+	case 3: hh_save_union_var4(no); break;
+	case 5: // load u16[start..] at 0x2180
+	case 6: // save
+	case 7: // load bytes at 0x2310 + start
+	case 8: { // save
+		unsigned base = param_or(params, 0, 0) <= 6 ? 0x2180 : 0x2310;
+		unsigned size = param_or(params, 0, 0) <= 6 ? 2 : 1;
+		if (base + (start + count) * size > ARGS_OFF) {
+			WARNING("hanahebi: invalid save range %u+%u", start, count);
+			break;
+		}
+		if (param_or(params, 0, 0) & 1)
+			savedata_read(flag_file(no), memory_raw, base + start * size, count * size);
+		else
+			savedata_write(flag_file(no), memory_raw, base + start * size, count * size);
+		break;
+	}
+	default:
+		log_unimplemented("System", 4, params);
+	}
+}
+
+/*
+ * System.function[24]: screen records (what is on screen, for redrawing after
+ * a load). Records are 46 bytes: u16 id, char name[32], u16 p[6]; kept sorted
+ * by id. A snapshot is taken at each save point and that is what gets saved.
+ */
+#define REC_SIZE 46
+#define MAX_RECS 30
+struct screen_record { uint16_t id; char name[32]; uint16_t p[6]; };
+static struct screen_record recs[MAX_RECS], recs_snap[MAX_RECS];
+static unsigned nr_recs = 0, nr_recs_snap = 0;
+
+void screen_records_snapshot(void)
+{
+	memcpy(recs_snap, recs, sizeof(recs));
+	nr_recs_snap = nr_recs;
+}
+
+static void recs_remove_if(bool (*pred)(struct screen_record*, void*), void *data)
+{
+	unsigned j = 0;
+	for (unsigned i = 0; i < nr_recs; i++) {
+		if (!pred(&recs[i], data))
+			recs[j++] = recs[i];
+	}
+	nr_recs = j;
+}
+
+static bool rec_id_is(struct screen_record *r, void *d) { return r->id == *(uint16_t*)d; }
+static bool rec_id_p0_is(struct screen_record *r, void *d)
+{
+	return r->id == ((uint16_t*)d)[0] && r->p[0] == ((uint16_t*)d)[1];
+}
+static const char *rec_cmp_name;
+static bool rec_id_name_is(struct screen_record *r, void *d)
+{
+	return r->id == *(uint16_t*)d && !strncmp(r->name, rec_cmp_name, 31);
+}
+
+static void recs_add(struct screen_record *r)
+{
+	if (nr_recs >= MAX_RECS) {
+		WARNING("hanahebi: too many screen records");
+		return;
+	}
+	// insert after records with the same or lower id (stable)
+	unsigned i = nr_recs;
+	while (i > 0 && recs[i-1].id > r->id) {
+		recs[i] = recs[i-1];
+		i--;
+	}
+	recs[i] = *r;
+	nr_recs++;
+}
+
+static void recs_write(unsigned no)
+{
+	uint8_t buf[4 + MAX_RECS * REC_SIZE];
+	memset(buf, 0, sizeof(buf));
+	le_put32(buf, 0, nr_recs_snap);
+	for (unsigned i = 0; i < nr_recs_snap; i++) {
+		uint8_t *b = buf + 4 + i * REC_SIZE;
+		le_put16(b, 0, recs_snap[i].id);
+		memcpy(b + 2, recs_snap[i].name, 32);
+		for (unsigned k = 0; k < 6; k++)
+			le_put16(b, 34 + k * 2, recs_snap[i].p[k]);
+	}
+	FILE *f = file_open_utf8(save_path("SaveData%03u.dat", no), "wb");
+	if (!f) {
+		WARNING("hanahebi: cannot write screen records %u", no);
+		return;
+	}
+	fwrite(buf, sizeof(buf), 1, f);
+	fclose(f);
+}
+
+static void recs_read(unsigned no)
+{
+	uint8_t buf[4 + MAX_RECS * REC_SIZE];
+	memset(buf, 0, sizeof(buf));
+	FILE *f = file_open_utf8(save_path("SaveData%03u.dat", no), "rb");
+	if (f) {
+		if (fread(buf, 1, sizeof(buf), f) < 4)
+			memset(buf, 0, 4);
+		fclose(f);
+	}
+	nr_recs = min(le_get32(buf, 0), MAX_RECS);
+	for (unsigned i = 0; i < nr_recs; i++) {
+		uint8_t *b = buf + 4 + i * REC_SIZE;
+		recs[i].id = le_get16(b, 0);
+		memcpy(recs[i].name, b + 2, 32);
+		recs[i].name[31] = '\0';
+		for (unsigned k = 0; k < 6; k++)
+			recs[i].p[k] = le_get16(b, 34 + k * 2);
+	}
+}
+
+static void hanahebi_screen_records(struct param_list *params)
+{
+	uint16_t key[2];
+	switch (param_or(params, 0, 0)) {
+	case 0: nr_recs = 0; break;
+	case 1:
+		key[0] = param_or(params, 1, 0);
+		recs_remove_if(rec_id_is, key);
+		break;
+	case 2: recs_read(param_or(params, 1, 0)); break;
+	case 3: recs_write(param_or(params, 1, 0)); break;
+	case 4: {
+		struct screen_record r = { .id = param_or(params, 1, 0) };
+		const char *name = "";
+		if (params->nr_params > 2 && params->params[2].type == MES_PARAM_STRING)
+			name = params->params[2].str;
+		strncpy(r.name, name, 31);
+		for (unsigned k = 0; k < 6; k++)
+			r.p[k] = param_or(params, 3 + k, 0);
+		recs_add(&r);
+		break;
+	}
+	case 5: {
+		unsigned i = param_or(params, 1, 0);
+		mem_set_var16(18, i < nr_recs ? recs[i].id : 0xffff);
+		break;
+	}
+	case 6: {
+		unsigned i = param_or(params, 1, 0);
+		uint32_t dst = param_or(params, 3, 0);
+		if (i < nr_recs && dst < sizeof(struct memory) - 32)
+			memcpy(memory_raw + dst, recs[i].name, 32);
+		break;
+	}
+	case 7: {
+		unsigned i = param_or(params, 1, 0), k = param_or(params, 2, 0);
+		if (i < nr_recs && k < 6)
+			mem_set_var16(18, recs[i].p[k]);
+		break;
+	}
+	case 8:
+		key[0] = param_or(params, 1, 0);
+		key[1] = param_or(params, 2, 0);
+		recs_remove_if(rec_id_p0_is, key);
+		break;
+	case 9:
+		key[0] = param_or(params, 1, 0);
+		rec_cmp_name = name_param(params, 2, 99);
+		recs_remove_if(rec_id_name_is, key);
+		break;
+	default:
+		log_unimplemented("System", 24, params);
+	}
+}
+
+/*
+ * System.function[26]: "already read" bits (MesSkip.dat, 0x14f2 bytes).
+ *   0 load, 1 save, 2 clear, 3 set bit n, 4 test bit n -> var16[18]
+ */
+#define MESSKIP_SIZE 0x14f2
+static uint8_t mes_skip[MESSKIP_SIZE];
+
+static void hanahebi_read_flags(struct param_list *params)
+{
+	unsigned n = param_or(params, 1, 0);
+	switch (param_or(params, 0, 0)) {
+	case 0: {
+		FILE *f = file_open_utf8(save_path("MesSkip.dat", 0), "rb");
+		if (f) {
+			if (fread(mes_skip, 1, MESSKIP_SIZE, f) != MESSKIP_SIZE)
+				WARNING("hanahebi: short MesSkip.dat");
+			fclose(f);
+		}
+		break;
+	}
+	case 1: {
+		FILE *f = file_open_utf8(save_path("MesSkip.dat", 0), "wb");
+		if (f) {
+			fwrite(mes_skip, MESSKIP_SIZE, 1, f);
+			fclose(f);
+		}
+		break;
+	}
+	case 2: memset(mes_skip, 0, MESSKIP_SIZE); break;
+	case 3:
+		if (n / 8 < MESSKIP_SIZE)
+			mes_skip[n / 8] |= 0x80 >> (n % 8);
+		break;
+	case 4:
+		mem_set_var16(18, n / 8 < MESSKIP_SIZE && (mes_skip[n / 8] & (0x80 >> (n % 8))));
+		break;
+	default:
+		log_unimplemented("System", 26, params);
+	}
+}
+
+/*
+ * Util 12: save/load screen (HH2D.exe draws its own; this one is ours).
+ *   (12, 0) save mode, (12, 1) load mode -> var16[18] = 0 save / 1 load / 2 close,
+ *   var16[13] = slot (1..32). (12, 2) close, (12, 3, n) nothing.
+ * The thumbnail (CG%03u.dat, 96x72 BGR bottom-up) is written when saving.
+ */
+#define SAVE_SLOTS 32
+#define SLOTS_PER_PAGE 8
+#define THUMB_W 96
+#define THUMB_H 72
+static uint8_t thumb_now[THUMB_W * THUMB_H * 3];
+static int save_page = 0;
+
+static void thumb_capture(void)
+{
+	SDL_Surface *src = SDL_ConvertSurfaceFormat(gfx_get_surface(0), SDL_PIXELFORMAT_RGB24, 0);
+	if (!src)
+		return;
+	const int sx = 640 / THUMB_W, sy = 480 / THUMB_H;
+	for (int y = 0; y < THUMB_H; y++) {
+		for (int x = 0; x < THUMB_W; x++) {
+			unsigned r = 0, g = 0, b = 0, n = 0;
+			for (int yy = y * 480 / THUMB_H; yy < y * 480 / THUMB_H + sy; yy++) {
+				uint8_t *p = (uint8_t*)src->pixels + yy * src->pitch + (x * 640 / THUMB_W) * 3;
+				for (int xx = 0; xx < sx; xx++, p += 3, n++) {
+					r += p[0]; g += p[1]; b += p[2];
+				}
+			}
+			// stored bottom-up BGR like a DIB
+			uint8_t *d = thumb_now + ((THUMB_H - 1 - y) * THUMB_W + x) * 3;
+			d[0] = b / n; d[1] = g / n; d[2] = r / n;
+		}
+	}
+	SDL_FreeSurface(src);
+}
+
+struct slot_info { bool used; char date[32]; SDL_Surface *thumb; };
+
+static void slot_info_get(unsigned no, struct slot_info *info)
+{
+	memset(info, 0, sizeof(*info));
+	char *path = path_get_icase(flag_file(no));
+	if (!path)
+		return;
+	FILE *f = file_open_utf8(path, "rb");
+	char name[16] = {0};
+	if (f) {
+		if (fread(name, 1, 15, f) != 15)
+			name[0] = 0;
+		fclose(f);
+	}
+	info->used = name[0] && strncasecmp(name, "FLAGINI", 7);
+	struct stat st;
+	if (info->used && !stat(path, &st)) {
+		struct tm *tm = localtime(&st.st_mtime);
+		strftime(info->date, sizeof(info->date), "%Y/%m/%d %H:%M", tm);
+	}
+	free(path);
+	if (!info->used)
+		return;
+	f = file_open_utf8(save_path("CG%03u.dat", no), "rb");
+	if (!f)
+		return;
+	uint8_t buf[THUMB_W * THUMB_H * 3];
+	if (fread(buf, sizeof(buf), 1, f) == 1) {
+		info->thumb = SDL_CreateRGBSurfaceWithFormat(0, THUMB_W, THUMB_H, 24, SDL_PIXELFORMAT_RGB24);
+		for (int y = 0; y < THUMB_H; y++) {
+			uint8_t *d = (uint8_t*)info->thumb->pixels + y * info->thumb->pitch;
+			uint8_t *s = buf + (THUMB_H - 1 - y) * THUMB_W * 3;
+			for (int x = 0; x < THUMB_W; x++, d += 3, s += 3) {
+				d[0] = s[2]; d[1] = s[1]; d[2] = s[0];
+			}
+		}
+	}
+	fclose(f);
+}
+
+static void work_text(int x, int y, const char *text)
+{
+	while (*text) {
+		int ch;
+		text = utf8_next(text, &ch);
+		x += gfx_text_draw_glyph(x, y, WORK_SURFACE, ch);
+	}
+}
+
+// screen layout
+enum { SL_TAB_SAVE = 100, SL_TAB_LOAD, SL_CLOSE, SL_PAGE0 = 200 };
+static void slot_rect(int id, SDL_Rect *r)
+{
+	if (id >= SL_PAGE0) {
+		*r = (SDL_Rect){ 200 + (id - SL_PAGE0) * 60, 436, 52, 34 };
+	} else if (id == SL_TAB_SAVE) {
+		*r = (SDL_Rect){ 20, 10, 130, 40 };
+	} else if (id == SL_TAB_LOAD) {
+		*r = (SDL_Rect){ 160, 10, 130, 40 };
+	} else if (id == SL_CLOSE) {
+		*r = (SDL_Rect){ 510, 10, 110, 40 };
+	} else {
+		*r = (SDL_Rect){ 20 + (id % 2) * 306, 60 + (id / 2) * 92, 294, 86 };
+	}
+}
+
+static int slot_hit(int x, int y)
+{
+	static const int ids[] = { SL_TAB_SAVE, SL_TAB_LOAD, SL_CLOSE,
+		SL_PAGE0, SL_PAGE0 + 1, SL_PAGE0 + 2, SL_PAGE0 + 3 };
+	SDL_Rect r;
+	for (int i = 0; i < SLOTS_PER_PAGE; i++) {
+		slot_rect(i, &r);
+		if (x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h)
+			return i;
+	}
+	for (unsigned i = 0; i < ARRAY_SIZE(ids); i++) {
+		slot_rect(ids[i], &r);
+		if (x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h)
+			return ids[i];
+	}
+	return -1;
+}
+
+static void box(SDL_Surface *ov, int id, bool hl, bool active)
+{
+	SDL_Rect r, in;
+	slot_rect(id, &r);
+	in = (SDL_Rect){ r.x + 2, r.y + 2, r.w - 4, r.h - 4 };
+	SDL_CALL(SDL_FillRect, ov, &r, SDL_MapRGBA(ov->format, hl ? 230 : 150, 40, 40, 240));
+	SDL_CALL(SDL_FillRect, ov, &in, SDL_MapRGBA(ov->format,
+			active ? 110 : hl ? 70 : 25, active ? 30 : 20, active ? 30 : 20, 235));
+}
+
+static void save_screen_draw(bool save_mode, struct slot_info *info, int hover)
+{
+	SDL_Surface *ov = gfx_get_overlay(2);
+	SDL_CALL(SDL_FillRect, ov, NULL, SDL_MapRGBA(ov->format, 0, 0, 0, 200));
+	gfx_fill(0, 0, 640, 480, WORK_SURFACE, 0);
+	gfx_text_set_colors(0, 0xffffff);
+	gfx_text_set_size(22, 0);
+	box(ov, SL_TAB_SAVE, hover == SL_TAB_SAVE, save_mode);
+	box(ov, SL_TAB_LOAD, hover == SL_TAB_LOAD, !save_mode);
+	box(ov, SL_CLOSE, hover == SL_CLOSE, false);
+	work_text(20 + 43, 19, "저장");
+	work_text(160 + 21, 19, "불러오기");
+	work_text(510 + 33, 19, "닫기");
+	for (int i = 0; i < 4; i++) {
+		box(ov, SL_PAGE0 + i, hover == SL_PAGE0 + i, save_page == i);
+		char t[4];
+		snprintf(t, sizeof(t), "%d", i + 1);
+		work_text(200 + i * 60 + 20, 442, t);
+	}
+	gfx_text_set_size(18, 0);
+	for (int i = 0; i < SLOTS_PER_PAGE; i++) {
+		SDL_Rect r;
+		slot_rect(i, &r);
+		box(ov, i, hover == i, false);
+		struct slot_info *si = &info[i];
+		SDL_Rect tr = { r.x + 7, r.y + 7, THUMB_W, THUMB_H };
+		if (si->thumb) {
+			SDL_CALL(SDL_BlitSurface, si->thumb, NULL, ov, &tr);
+		} else {
+			SDL_CALL(SDL_FillRect, ov, &tr, SDL_MapRGBA(ov->format, 0, 0, 0, 255));
+		}
+		char t[48];
+		snprintf(t, sizeof(t), "No.%02d", save_page * SLOTS_PER_PAGE + i + 1);
+		work_text(r.x + 115, r.y + 12, t);
+		work_text(r.x + 115, r.y + 48, si->used ? si->date : "비어 있음");
+	}
+	SDL_Surface *ts = gfx_get_surface(WORK_SURFACE);
+	SDL_CALL(SDL_SetColorKey, ts, SDL_TRUE, SDL_MapRGB(ts->format, 0, 0, 0));
+	SDL_CALL(SDL_BlitSurface, ts, NULL, ov, NULL);
+	SDL_CALL(SDL_SetColorKey, ts, SDL_FALSE, 0);
+	gfx_overlay_enable(2);
+	gfx_screen_dirty();
+}
+
+static bool confirm(const char *question)
+{
+	const char *items[] = { question, "예", "아니오" };
+	// the first item is only a label; pick again if chosen
+	while (true) {
+		int r = choice_run(items, 3);
+		if (r != 0)
+			return r == 1;
+	}
+}
+
+/*
+ * Util 5: system menu. HH2D.exe uses the Windows menu bar; we show a popup.
+ * var16[18]: 1 save, 2 load, 4 backlog, 5 hide message window, 7 status,
+ * 9 title, 10 quit, 11 (or cancel) close.
+ */
+static void util_system_menu(void)
+{
+	static const struct { const char *text; unsigned code; } items[] = {
+		{ "저장하기", 1 },
+		{ "불러오기", 2 },
+		{ "지난 대사 보기", 4 },
+		{ "메시지창 숨기기", 5 },
+		{ "타이틀로 돌아가기", 9 },
+		{ "게임 종료", 10 },
+		{ "돌아가기", 11 },
+	};
+	const char *text[ARRAY_SIZE(items)];
+	for (unsigned i = 0; i < ARRAY_SIZE(items); i++)
+		text[i] = items[i].text;
+	int r = choice_run(text, ARRAY_SIZE(items));
+	unsigned code = r < 0 ? 11 : items[r].code;
+	if ((code == 9 || code == 10) && !confirm(code == 9 ? "타이틀로 돌아갈까요?" : "게임을 끝낼까요?"))
+		code = 11;
+	mem_set_var16(18, code);
+}
+
+static void util_save_screen(unsigned mode)
+{
+	if (mode >= 2)
+		return;
+	bool save_mode = mode == 0;
+	thumb_capture();
+	struct slot_info info[SLOTS_PER_PAGE];
+	bool reload = true;
+	int hover = -1, last = -2, action = 2, slot = 0;
+	input_wait_until_up(INPUT_ACTIVATE);
+	input_wait_until_up(INPUT_CANCEL);
+	while (true) {
+		if (reload) {
+			for (int i = 0; i < SLOTS_PER_PAGE; i++)
+				slot_info_get(save_page * SLOTS_PER_PAGE + i + 1, &info[i]);
+			reload = false;
+			last = -2;
+		}
+		unsigned cx, cy;
+		cursor_get_pos(&cx, &cy);
+		hover = slot_hit(cx, cy);
+		if (hover != last) {
+			save_screen_draw(save_mode, info, hover);
+			last = hover;
+		}
+		if (input_down(INPUT_CANCEL)) {
+			input_wait_until_up(INPUT_CANCEL);
+			break;
+		}
+		if (input_down(INPUT_ACTIVATE)) {
+			cursor_get_pos(&cx, &cy);
+			hover = slot_hit(cx, cy);
+		}
+		if (!input_down(INPUT_ACTIVATE) || hover < 0) {
+			vm_peek();
+			vm_delay(16);
+			continue;
+		}
+		input_wait_until_up(INPUT_ACTIVATE);
+		if (hover == SL_CLOSE)
+			break;
+		if (hover == SL_TAB_SAVE || hover == SL_TAB_LOAD) {
+			save_mode = hover == SL_TAB_SAVE;
+			last = -2;
+			continue;
+		}
+		if (hover >= SL_PAGE0) {
+			save_page = hover - SL_PAGE0;
+			reload = true;
+			continue;
+		}
+		int no = save_page * SLOTS_PER_PAGE + hover + 1;
+		if (!save_mode && !info[hover].used)
+			continue;
+		bool ok = save_mode
+			? (!info[hover].used || confirm("이 칸에 덮어쓸까요?"))
+			: confirm("이 데이터를 불러올까요?");
+		last = -2;
+		if (!ok)
+			continue;
+		action = save_mode ? 0 : 1;
+		slot = no;
+		break;
+	}
+	for (int i = 0; i < SLOTS_PER_PAGE; i++) {
+		if (info[i].thumb)
+			SDL_FreeSurface(info[i].thumb);
+	}
+	if (action == 0) {
+		FILE *f = file_open_utf8(save_path("CG%03u.dat", slot), "wb");
+		if (f) {
+			fwrite(thumb_now, sizeof(thumb_now), 1, f);
+			fclose(f);
+		}
+	}
+	gfx_overlay_disable(2);
+	gfx_screen_dirty();
+	mem_set_var16(18, action);
+	mem_set_var16(13, slot);
+}
+
 static void hanahebi_mem_restore(void)
 {
 	mem_set_sysvar16_ptr(SYSVAR16_OFF);
 	mem_set_sysvar32(mes_sysvar32_memory, offsetof(struct memory, mem16));
-	mem_set_sysvar32(mes_sysvar32_file_data, offsetof(struct memory, file_data));
+	// sysvar32[8] is the current save point (statement 0x17), not file_data
 	mem_set_sysvar32(mes_sysvar32_menu_entry_addresses,
 		offsetof(struct memory, menu_entry_addresses));
 	mem_set_sysvar32(mes_sysvar32_menu_entry_numbers,
@@ -1437,8 +2106,8 @@ struct game game_hanahebi = {
 		[0x14] = vm_stmt_defproc,
 		[0x15] = hanahebi_menuexec,
 		[0x16] = vm_stmt_set_var32_const8,
-		[0x17] = vm_stmt_skip_dword,
-		[0x18] = vm_stmt_skip_expr,
+		[0x17] = hh_stmt_save_point,
+		[0x18] = hh_stmt_jump_save_point,
 		[0x19] = vm_stmt_nop,
 		[0x1a] = vm_stmt_nop,
 		[0x1b] = vm_stmt_skip_params,
@@ -1450,7 +2119,7 @@ struct game game_hanahebi = {
 		[0]  = hanahebi_set_font_size,
 		[2]  = hanahebi_cursor,
 		[3]  = sys_stub_3,
-		[4]  = sys_stub_4,
+		[4]  = hanahebi_savedata,
 		[5]  = hanahebi_bgm,
 		[6]  = hanahebi_se,
 		[7]  = hanahebi_voice,
@@ -1466,8 +2135,8 @@ struct game game_hanahebi = {
 		[19] = hanahebi_backlog,
 		[20] = hanahebi_strlen,
 		[23] = sys_stub_23,
-		[24] = sys_stub_24,
-		[26] = sys_stub_26,
+		[24] = hanahebi_screen_records,
+		[26] = hanahebi_read_flags,
 		[27] = hanahebi_settings,
 		[28] = sys_stub_28,
 		[29] = hanahebi_get_time,
@@ -1479,5 +2148,6 @@ struct game game_hanahebi = {
 		// not a real flag in this game (0x10 is used by scripts for something else)
 		[FLAG_RETURN] = 0x8000,
 		[FLAG_MENU_RETURN] = 0x0004,
+		[FLAG_WAIT_KEYUP] = FLAG_ALWAYS_ON,
 	},
 };

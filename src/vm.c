@@ -1440,6 +1440,9 @@ void vm_stmt_nop(void)
  * Load a MES file which starts with an address table (u32 count + u32 * count).
  * Code addresses are relative to the end of the table.
  */
+uint32_t *vm_mes_table = NULL;
+unsigned vm_mes_table_size = 0;
+
 void vm_load_mes_with_table(char *name)
 {
 	// debugging: AI5_REDIRECT_MES="FROM.MES=TO.MES" loads TO instead of FROM
@@ -1466,6 +1469,12 @@ void vm_load_mes_with_table(char *name)
 		VM_ERROR("Invalid MES address table in \"%s\"", name);
 	if (file->size - table_size > MEMORY_FILE_DATA_SIZE)
 		VM_ERROR("MES file too large: \"%s\"", name);
+	// keep the address table: statement 0x18 jumps to table[n] (resume after load)
+	free(vm_mes_table);
+	vm_mes_table_size = table_size >= 4 ? (table_size - 4) / 4 : 0;
+	vm_mes_table = xcalloc(vm_mes_table_size + 1, sizeof(uint32_t));
+	for (unsigned i = 0; i < vm_mes_table_size; i++)
+		vm_mes_table[i] = le_get32(file->data, 4 + i * 4);
 	dbg_invalidate(offsetof(struct memory, file_data), file->size - table_size);
 	memcpy(memory.file_data, file->data + table_size, file->size - table_size);
 	archive_data_release(file);

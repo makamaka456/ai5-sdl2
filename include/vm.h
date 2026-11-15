@@ -188,6 +188,9 @@ void vm_stmt_skip_dword(void);
 void vm_stmt_skip_expr(void);
 void vm_stmt_skip_params(void);
 void vm_stmt_nop(void);
+// address table at the start of the current MES file (Nonomura format)
+extern uint32_t *vm_mes_table;
+extern unsigned vm_mes_table_size;
 void vm_load_mes_with_table(char *name);
 
 #define DEFAULT_EXPR_OP \
