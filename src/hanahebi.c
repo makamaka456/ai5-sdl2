@@ -925,6 +925,27 @@ static void hanahebi_util(struct param_list *params)
 	case 60:
 		util_scroll(params);
 		break;
+	case 12000: { // crossfade from surface 4 (old screen) to surface 1 (HH2D.exe 0x421760)
+		int n = param_or(params, 1, 5);
+		int div = (n * 3 / 15) * 32;
+		int step = div > 0 ? 256 / div : 255;
+		step = step < 1 ? 1 : step > 255 ? 255 : step;
+		const char *v = config_ini_get("DispEffect", "Play");
+		int play = v ? atoi(v) : 1;
+		if (play == 1)
+			step *= 2;
+		else if (play == 2)
+			step *= 4;
+		vm_timer_t timer = vm_timer_create();
+		for (int a = step; a < 256 && !input_down(INPUT_CTRL); a += step) {
+			gfx_copy(0, 0, 640, 480, 4, 0, 0, 0);
+			gfx_blend(0, 0, 640, 480, 1, 0, 0, 0, a);
+			vm_peek();
+			vm_timer_tick(&timer, 15);
+		}
+		gfx_copy(0, 0, 640, 480, 1, 0, 0, 0);
+		break;
+	}
 	case 6: case 10: // system menu closed / redraw menu bar
 	case 1005: case 1006: // map: pause/resume (TODO)
 		break;
