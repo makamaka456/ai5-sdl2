@@ -1663,6 +1663,13 @@ static void hanahebi_voice(struct param_list *params)
 static void hanahebi_present(struct param_list *params)
 {
 	unsigned mode = param_or(params, 0, 0);
+	// (0, color): flash the screen with a color; the next (0) shows the
+	// back buffer again
+	if (mode == 0 && params->nr_params == 2) {
+		gfx_copy(0, 0, 640, 480, 0, 0, 0, PREV_SURFACE);
+		gfx_fill(0, 0, 640, 480, 0, param_or(params, 1, 0));
+		return;
+	}
 	if (param_or(params, 2, 0))
 		gfx_fill(0, 0, 640, 480, BACK_SURFACE, param_or(params, 1, 0));
 	gfx_copy(0, 0, 640, 480, 0, 0, 0, PREV_SURFACE);
