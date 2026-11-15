@@ -10,3 +10,10 @@ unpacked/
 *.apk
 *.arc
 *.ARC
+# Android build
+android/app/jni/deps/
+android/app/build/
+android/app/.cxx/
+android/build/
+android/.gradle/
+android/local.properties

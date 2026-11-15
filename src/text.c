@@ -116,6 +116,20 @@ static struct font *font_insert(int size, TTF_Font *id, TTF_Font *id_outline)
 	return &fonts[nr_fonts++];
 }
 
+/*
+ * Path of a data file (fonts). The AI5_DATA_DIR environment variable
+ * overrides the build-time directory (used by the Android port).
+ */
+static char *data_path(const char *rel)
+{
+	const char *dir = getenv("AI5_DATA_DIR");
+	if (!dir || !*dir)
+		dir = AI5_DATA_DIR;
+	char *path = xmalloc(strlen(dir) + strlen(rel) + 2);
+	sprintf(path, "%s/%s", dir, rel);
+	return path;
+}
+
 #define EMBEDDED_FONT(name) (struct font_spec) { \
 	.embedded = true, \
 	.rwops = SDL_RWFromConstMem(font_##name, font_##name##_len), \
@@ -127,7 +141,7 @@ static void init_ui_font(void)
 #ifdef EMBED_TAHOMA
 	font_spec[FONT_UI] = EMBEDDED_FONT(tahoma);
 #else
-	font_spec[FONT_UI].path = xstrdup(AI5_DATA_DIR "/fonts/wine_tahoma.ttf");
+	font_spec[FONT_UI].path = data_path("fonts/wine_tahoma.ttf");
 #endif
 }
 
@@ -136,17 +150,17 @@ static void init_fonts_standard(void)
 #ifdef EMBED_DOTGOTHIC
 	font_spec[FONT_SMALL] = EMBEDDED_FONT(dotgothic);
 #else
-	font_spec[FONT_SMALL].path = xstrdup(AI5_DATA_DIR "/fonts/DotGothic16-Regular.ttf");
+	font_spec[FONT_SMALL].path = data_path("fonts/DotGothic16-Regular.ttf");
 #endif
 #ifdef EMBED_KOSUGI
 	font_spec[FONT_LARGE] = EMBEDDED_FONT(kosugi);
 #else
-	font_spec[FONT_LARGE].path = xstrdup(AI5_DATA_DIR "/fonts/Kosugi-Regular.ttf");
+	font_spec[FONT_LARGE].path = data_path("fonts/Kosugi-Regular.ttf");
 #endif
 #ifdef EMBED_NOTO
 	font_spec[FONT_ENG] = EMBEDDED_FONT(noto);
 #else
-	font_spec[FONT_ENG].path = xstrdup(AI5_DATA_DIR "/fonts/NotoSansJP-Thin.ttf");
+	font_spec[FONT_ENG].path = data_path("fonts/NotoSansJP-Thin.ttf");
 #endif
 }
 
@@ -154,7 +168,7 @@ static void init_fonts_korean(void)
 {
 	// CP949 text: use a font that covers all of KS X 1001 (Hangul, Hanja
 	// and kana), since the Japanese fonts have no Hangul glyphs.
-	font_spec[FONT_SMALL].path = xstrdup(AI5_DATA_DIR "/fonts/NanumGothic.ttf");
+	font_spec[FONT_SMALL].path = data_path("fonts/NanumGothic.ttf");
 	font_spec[FONT_LARGE].path = xstrdup(font_spec[FONT_SMALL].path);
 	font_spec[FONT_ENG].path = xstrdup(font_spec[FONT_SMALL].path);
 }
