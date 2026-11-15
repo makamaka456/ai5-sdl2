@@ -152,6 +152,7 @@ static void msgwin_show(void);
 static void msgwin_hide(void);
 static void util_save_screen(unsigned mode);
 static void util_system_menu(void);
+static void util_title_menu(unsigned menu);
 static void util_backlog_view(void);
 static void bl_add_text(const char *text);
 static void work_text(int x, int y, const char *text);
@@ -842,6 +843,9 @@ static void hanahebi_util(struct param_list *params)
 		break;
 	case 24:
 		util_backlog_view();
+		break;
+	case 11000:
+		util_title_menu(param_or(params, 1, 0));
 		break;
 	case 502: msgwin_show(); break;
 	case 503: msgwin_hide(); break;
@@ -2150,6 +2154,258 @@ static void util_system_menu(void)
 	mem_set_var16(18, code);
 }
 
+/*
+ * Util 11000: title menu (HH2D.exe 0x475d80). Buttons come from title_p.gcc
+ * (200x40 each; columns: normal, -, highlighted, disabled). Returns
+ * var16[18] = menu * 0x100 + item.
+ *   menu 0: 0 start (submenu 1 if var4[4212]), 1 continue (shown if
+ *           var4[4119]), 2 extras (submenu 2), 3 quit
+ *   menu 1: 0 from the prologue, 1 from chapter 1, 2 back
+ *   menu 2: 0 music, 1 CG, 2 scenes, 3 endings, 4 free training (shown if
+ *           var4[5100+n]), 5 back
+ */
+struct title_button { unsigned id; int x, y, src_y; bool enabled; };
+
+static unsigned title_buttons(unsigned menu, struct title_button *b)
+{
+	unsigned n = 0;
+	uint8_t *v4 = memory_raw + VAR4_OFF;
+	bool cont = v4[4119] == 1;
+	// main column
+	int y0 = cont ? 0x118 : 0x148;
+	b[n++] = (struct title_button) { 0x000, 0x1b8, y0, 0x00, menu == 0 };
+	if (cont)
+		b[n++] = (struct title_button) { 0x001, 0x1b8, 0x148, 0x28, menu == 0 };
+	b[n++] = (struct title_button) { 0x002, 0x1b8, 0x178, 0x50, menu == 0 };
+	b[n++] = (struct title_button) { 0x003, 0x1b8, 0x1a8, 0x78, menu == 0 };
+	if (menu == 1) {
+		b[n++] = (struct title_button) { 0x100, 0xdc, 0x118, 400, true };
+		b[n++] = (struct title_button) { 0x101, 0xdc, 0x148, 0x1b8, true };
+		b[n++] = (struct title_button) { 0x102, 0xdc, 0x178, 0x168, true };
+	} else if (menu == 2) {
+		b[n++] = (struct title_button) { 0x205, 0xdc, 0x1a8, 0x168, true };
+		int y = 0x178;
+		for (int i = 4; i >= 0; i--) {
+			if (v4[5100 + i] != 1)
+				continue;
+			b[n++] = (struct title_button) { 0x200 + i, 0xdc, y, 0xa0 + i * 0x28, true };
+			y -= 0x30;
+		}
+	}
+	return n;
+}
+
+static void title_draw(SDL_Surface *parts, unsigned menu, struct title_button *b,
+		unsigned n, int hover)
+{
+	SDL_Surface *ov = gfx_get_overlay(2);
+	SDL_CALL(SDL_FillRect, ov, NULL, SDL_MapRGBA(ov->format, 0, 0, 0, 0));
+	for (unsigned i = 0; i < n; i++) {
+		int col = 0;
+		if (!b[i].enabled)
+			col = (menu == 1 && b[i].id == 0) || (menu == 2 && b[i].id == 2) ? 2 : 3;
+		else if ((int)i == hover)
+			col = 2;
+		SDL_Rect src = { col * 200, b[i].src_y, 200, 40 };
+		SDL_Rect dst = { b[i].x, b[i].y, 200, 40 };
+		SDL_CALL(SDL_BlitSurface, parts, &src, ov, &dst);
+	}
+	gfx_overlay_enable(2);
+	gfx_screen_dirty();
+}
+
+static int title_hit(struct title_button *b, unsigned n)
+{
+	unsigned cx, cy;
+	cursor_get_pos(&cx, &cy);
+	for (unsigned i = 0; i < n; i++) {
+		if (b[i].enabled && (int)cx >= b[i].x && (int)cx < b[i].x + 200
+				&& (int)cy >= b[i].y && (int)cy < b[i].y + 40)
+			return i;
+	}
+	return -1;
+}
+
+/*
+ * Korean labels for title_p.gcc: the Japanese text in the middle of each
+ * button is replaced by a horizontal gradient between the button's own
+ * pixels left and right of the text, then Korean text is drawn on it.
+ */
+static const char *title_labels_ko[12] = {
+	"시작", "이어하기", "여흥", "종료", "음악 감상", "그림 감상",
+	"장면 회상", "엔딩 회상", "자유 조교", "돌아가기", "서장부터", "제1장부터",
+};
+
+static void title_label(SDL_Surface *parts, int bx, int by, const char *text, uint32_t color)
+{
+	// render white text on black into the work surface, then use it as coverage
+	gfx_fill(0, 0, 640, 480, WORK_SURFACE, 0);
+	gfx_text_set_colors(0, 0xffffff);
+	gfx_text_set_size(22, 0);
+	int tw = text_width(text);
+	int x = 4;
+	for (const char *t = text; *t; ) {
+		int ch;
+		t = utf8_next(t, &ch);
+		x += gfx_text_draw_glyph(x, 4, WORK_SURFACE, ch);
+	}
+	SDL_Surface *ws = SDL_ConvertSurfaceFormat(gfx_get_surface(WORK_SURFACE), SDL_PIXELFORMAT_RGB24, 0);
+	int ox = bx + (200 - tw) / 2 - 4, oy = by + 7 - 4;
+	uint8_t *dst = parts->pixels;
+	for (int pass = 0; pass < 2; pass++) {
+		// pass 0: dark outline, pass 1: text
+		for (int y = 0; y < 34; y++) {
+			for (int x = 0; x < tw + 8; x++) {
+				int a = 0;
+				if (pass == 0) {
+					for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) {
+						int sx = x + dx, sy = y + dy;
+						if (sx < 0 || sy < 0 || sx >= tw + 8 || sy >= 34)
+							continue;
+						a = max(a, ((uint8_t*)ws->pixels)[sy * ws->pitch + sx * 3]);
+					}
+				} else {
+					a = ((uint8_t*)ws->pixels)[y * ws->pitch + x * 3];
+				}
+				if (!a)
+					continue;
+				int px = ox + x, py = oy + y;
+				if (px < bx || px >= bx + 200 || py < by || py >= by + 40)
+					continue;
+				uint8_t *d = dst + py * parts->pitch + px * 4;
+				uint32_t c = pass ? color : 0x200808;
+				uint8_t rgb[3] = { c >> 16, (c >> 8) & 0xff, c & 0xff };
+				for (int k = 0; k < 3; k++)
+					d[k] = (d[k] * (255 - a) + rgb[k] * a) / 255;
+			}
+		}
+	}
+	SDL_FreeSurface(ws);
+}
+
+static void title_parts_korean(SDL_Surface *parts)
+{
+	uint8_t *px = parts->pixels;
+	for (int row = 0; row < 12; row++) {
+		for (int col = 0; col < 4; col++) {
+			int bx = col * 200, by = row * 40;
+			// erase the text area
+			for (int y = by + 7; y < by + 33; y++) {
+				uint8_t *l = px + y * parts->pitch + (bx + 36) * 4;
+				uint8_t *r = px + y * parts->pitch + (bx + 164) * 4;
+				for (int x = bx + 37; x < bx + 164; x++) {
+					int t = (x - (bx + 36)) * 256 / 128;
+					uint8_t *d = px + y * parts->pitch + x * 4;
+					for (int k = 0; k < 4; k++)
+						d[k] = (l[k] * (256 - t) + r[k] * t) >> 8;
+					if (col == 2) {
+						// highlighted: a soft white glow in the middle
+						int dx = x - (bx + 100), dy = (y - (by + 20)) * 4;
+						int g = 160 - (dx * dx + dy * dy) / 40;
+						if (g > 0)
+							for (int k = 0; k < 3; k++)
+								d[k] = d[k] + (255 - d[k]) * g / 255;
+					}
+				}
+			}
+			// rows above/below: erase only the middle (inside the ellipse border)
+			for (int y = by + 3; y < by + 37; y++) {
+				if (y >= by + 7 && y < by + 33)
+					continue;
+				uint8_t *l = px + y * parts->pitch + (bx + 58) * 4;
+				uint8_t *r = px + y * parts->pitch + (bx + 142) * 4;
+				for (int x = bx + 59; x < bx + 142; x++) {
+					int t = (x - (bx + 58)) * 256 / 84;
+					uint8_t *d = px + y * parts->pitch + x * 4;
+					for (int k = 0; k < 4; k++)
+						d[k] = (l[k] * (256 - t) + r[k] * t) >> 8;
+				}
+			}
+			static const uint32_t colors[4] = { 0xf4e8c0, 0xd8d0f0, 0xc01818, 0x7a7a7a };
+			title_label(parts, bx, by, title_labels_ko[row], colors[col]);
+		}
+	}
+}
+
+static void util_title_menu(unsigned menu)
+{
+	struct cg *cg = hh_cg_load("title_p.gcc");
+	if (!cg) {
+		mem_set_var16(18, 0);
+		return;
+	}
+	SDL_Surface *parts = SDL_CreateRGBSurfaceWithFormatFrom(cg->pixels, cg->metrics.w,
+			cg->metrics.h, 32, cg->metrics.w * 4, SDL_PIXELFORMAT_RGBA32);
+	SDL_SetSurfaceBlendMode(parts, SDL_BLENDMODE_NONE);
+	if (text_encoding_is_cp949())
+		title_parts_korean(parts);
+	if (menu > 2)
+		menu = 0;
+	struct title_button b[12];
+	unsigned n = title_buttons(menu, b);
+	int hover = -1, last = -2, result = -1;
+	input_wait_until_up(INPUT_ACTIVATE);
+	while (result < 0) {
+		int h = title_hit(b, n);
+		if (h >= 0)
+			hover = h;
+		// keyboard: move between enabled buttons
+		int dir = input_down(INPUT_UP) ? -1 : input_down(INPUT_DOWN) ? 1 : 0;
+		if (dir) {
+			int i = hover;
+			for (unsigned k = 0; k < n; k++) {
+				i = (i + dir + (int)n) % (int)n;
+				if (b[i].enabled)
+					break;
+			}
+			hover = i;
+			input_wait_until_up(dir < 0 ? INPUT_UP : INPUT_DOWN);
+		}
+		if (hover != last) {
+			title_draw(parts, menu, b, n, hover);
+			last = hover;
+		}
+		bool back = input_down(INPUT_CANCEL) && menu != 0;
+		if (back)
+			input_wait_until_up(INPUT_CANCEL);
+		if (input_down(INPUT_ACTIVATE)) {
+			h = title_hit(b, n);
+			if (h >= 0)
+				hover = h;
+			input_wait_until_up(INPUT_ACTIVATE);
+			if (hover >= 0 && b[hover].enabled) {
+				unsigned id = b[hover].id;
+				if (id == 0x102 || id == 0x205) {
+					back = true;
+				} else if ((id == 0x000 && memory_raw[VAR4_OFF + 4212]) || id == 0x002) {
+					audio_se_play("hh_217.wav", 2);
+					menu = id == 0 ? 1 : 2;
+					n = title_buttons(menu, b);
+					hover = -1; last = -2;
+					continue;
+				} else {
+					audio_se_play("hh_217.wav", 2);
+					result = id;
+				}
+			}
+		}
+		if (back) {
+			audio_se_play("hh_218.wav", 2);
+			menu = 0;
+			n = title_buttons(menu, b);
+			hover = -1; last = -2;
+			continue;
+		}
+		vm_peek();
+		vm_delay(16);
+	}
+	SDL_FreeSurface(parts);
+	cg_free(cg);
+	gfx_overlay_disable(2);
+	gfx_screen_dirty();
+	mem_set_var16(18, result);
+}
+
 static void util_save_screen(unsigned mode)
 {
 	if (mode >= 2)
@@ -2191,6 +2447,8 @@ static void util_save_screen(unsigned mode)
 		input_wait_until_up(INPUT_ACTIVATE);
 		if (hover == SL_CLOSE)
 			break;
+		if (hover == SL_TAB_SAVE && !strcasecmp(mem_mes_name(), "MAIN.MES"))
+			continue; // nothing to save on the title screen
 		if (hover == SL_TAB_SAVE || hover == SL_TAB_LOAD) {
 			save_mode = hover == SL_TAB_SAVE;
 			last = -2;
