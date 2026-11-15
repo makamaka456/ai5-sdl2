@@ -2006,6 +2006,66 @@ static void util_item_list(void)
 	choice_run(items, n);
 }
 
+/*
+ * Util 7000: status of the women (HH2D.exe 0x457be0; the original draws
+ * status.gcc). Per person p (0 Shizuko .. 3 Mitsuko, 4 Chako):
+ *   stage = byte 0x65d + p (Chako: 2), experience with 10 tools at
+ *   0x6c0 + p * 10, stage 1/2 done = bytes 0x6aa + p * 2 (+1) == 2,
+ *   three u16 values (meaning not confirmed) at 0x2180/0x2188/0x2190/0x2198
+ *   (Chako 0x220c): shown in the order HH2D.exe reads them.
+ */
+static void util_status(void)
+{
+	static const char *names[5] = { "시즈코", "케이코", "쿄코", "미츠코", "체코" };
+	static const char *tools[10] = { "애널 드릴", "토란 줄기 감기", "바이브", "파이즈리",
+		"펠라치오", "승마 채찍", "청죽", "양초", "이뇨제", "관장" };
+	static const uint16_t param_off[5] = { 0x2180, 0x2188, 0x2190, 0x2198, 0x220c };
+	while (true) {
+		const char *items[6] = { names[0], names[1], names[2], names[3], names[4], "돌아가기" };
+		int p = choice_run(items, 6);
+		if (p < 0 || p >= 5)
+			break;
+		SDL_Surface *ov = gfx_get_overlay(2);
+		SDL_CALL(SDL_FillRect, ov, NULL, SDL_MapRGBA(ov->format, 0, 0, 0, 200));
+		gfx_fill(0, 0, 640, 480, WORK_SURFACE, 0);
+		gfx_text_set_colors(0, 0xffffff);
+		gfx_text_set_size(22, 0);
+		char line[96];
+		unsigned stage = p == 4 ? 2 : memory_raw[0x65d + p];
+		snprintf(line, sizeof(line), "%s  —  조교 %u단계", names[p], stage + 1 > 3 ? 3 : stage + 1);
+		work_text(40, 24, line);
+		gfx_text_set_size(18, 0);
+		snprintf(line, sizeof(line), "1단계 완료: %s   2단계 완료: %s",
+				memory_raw[0x6aa + p * 2] == 2 ? "예" : "아니오",
+				memory_raw[0x6ab + p * 2] == 2 ? "예" : "아니오");
+		work_text(40, 64, line);
+		const uint8_t *pv = memory_raw + param_off[p];
+		snprintf(line, sizeof(line), "수치: %u / %u / %u", le_get16(pv, 0), le_get16(pv, 2), le_get16(pv, 4));
+		work_text(40, 94, line);
+		work_text(40, 134, "도구별 조교 경험");
+		for (unsigned t = 0; t < 10; t++) {
+			snprintf(line, sizeof(line), "%s: %u", tools[t], memory_raw[0x6c0 + p * 10 + t]);
+			work_text(60 + (t / 5) * 280, 166 + (t % 5) * 30, line);
+		}
+		work_text(40, 430, "누르면 돌아갑니다");
+		SDL_Surface *ts = gfx_get_surface(WORK_SURFACE);
+		SDL_CALL(SDL_SetColorKey, ts, SDL_TRUE, SDL_MapRGB(ts->format, 0, 0, 0));
+		SDL_CALL(SDL_BlitSurface, ts, NULL, ov, NULL);
+		SDL_CALL(SDL_SetColorKey, ts, SDL_FALSE, 0);
+		gfx_overlay_enable(2);
+		gfx_screen_dirty();
+		input_wait_until_up(INPUT_ACTIVATE);
+		while (!input_down(INPUT_ACTIVATE) && !input_down(INPUT_CANCEL)) {
+			vm_peek();
+			vm_delay(16);
+		}
+		input_wait_until_up(INPUT_ACTIVATE);
+		input_wait_until_up(INPUT_CANCEL);
+		gfx_overlay_disable(2);
+		gfx_screen_dirty();
+	}
+}
+
 static void hanahebi_util(struct param_list *params)
 {
 	if (getenv("HH_DEBUG_UTIL") && vm_expr_param(params, 0) != 9000 && vm_expr_param(params, 0) != 504) {
@@ -2231,6 +2291,9 @@ static void hanahebi_util(struct param_list *params)
 		break;
 	case 10000:
 		util_config();
+		break;
+	case 7000:
+		util_status();
 		break;
 	case 8000:
 		if (param_or(params, 1, 0) == 1)
@@ -3808,6 +3871,7 @@ static void util_system_menu(void)
 		{ "지난 대사 보기", 4 },
 		{ "메시지창 숨기기", 5 },
 		{ "가진 도구 보기", 6 },
+		{ "상태 보기", 7 },
 		{ "환경 설정", 8 },
 		{ "타이틀로 돌아가기", 9 },
 		{ "게임 종료", 10 },
