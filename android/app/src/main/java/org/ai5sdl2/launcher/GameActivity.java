@@ -5,12 +5,16 @@ package org.ai5sdl2.launcher;
 import android.app.AlertDialog;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.RelativeLayout;
@@ -22,6 +26,7 @@ import java.util.ArrayList;
 public class GameActivity extends SDLActivity {
     public static final String EXTRA_PATH = "path";
     public static final String EXTRA_ARGS = "args";
+    public static final String EXTRA_STRETCH = "stretch";
 
     private LinearLayout controls;
     private boolean ctrlHeld = false;
@@ -38,6 +43,8 @@ public class GameActivity extends SDLActivity {
         nativeSetenv("AI5_DATA_DIR", getFilesDir().getAbsolutePath());
         // a tap is a left click; the back button is handled below
         nativeSetenv("SDL_ANDROID_TRAP_BACK_BUTTON", "1");
+        // fill the whole screen (ignore the 4:3 aspect ratio) if chosen in the launcher
+        nativeSetenv("AI5_STRETCH", getIntent().getBooleanExtra(EXTRA_STRETCH, true) ? "1" : "0");
         ArrayList<String> args = new ArrayList<>();
         String[] extra = getIntent().getStringArrayExtra(EXTRA_ARGS);
         if (extra != null) {
@@ -51,8 +58,42 @@ public class GameActivity extends SDLActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // use the whole screen, including the area around a camera cutout
+        if (Build.VERSION.SDK_INT >= 28) {
+            WindowManager.LayoutParams lp = getWindow().getAttributes();
+            lp.layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            getWindow().setAttributes(lp);
+        }
+        hideSystemBars();
         if (mLayout != null)
             addControls();
+    }
+
+    // full screen: hide the status and navigation bars (swipe to show them)
+    @SuppressWarnings("deprecation")
+    private void hideSystemBars() {
+        View decor = getWindow().getDecorView();
+        decor.setSystemUiVisibility(View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                | View.SYSTEM_UI_FLAG_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+        if (Build.VERSION.SDK_INT >= 30) {
+            WindowInsetsController c = getWindow().getInsetsController();
+            if (c != null) {
+                c.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
+                c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+            }
+        }
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus)
+            hideSystemBars();
     }
 
     private Button makeButton(String text) {
@@ -104,8 +145,16 @@ public class GameActivity extends SDLActivity {
         RelativeLayout.LayoutParams lp = new RelativeLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.addRule(RelativeLayout.ALIGN_PARENT_END);
-        lp.addRule(RelativeLayout.ALIGN_PARENT_TOP);
+        lp.addRule(RelativeLayout.CENTER_VERTICAL);
         mLayout.addView(controls, lp);
+        // keep the buttons away from rounded corners and camera cutouts
+        controls.setOnApplyWindowInsetsListener((v, insets) -> {
+            int right = 8;
+            if (Build.VERSION.SDK_INT >= 28 && insets.getDisplayCutout() != null)
+                right += insets.getDisplayCutout().getSafeInsetRight();
+            v.setPadding(0, 0, right, 0);
+            return insets;
+        });
     }
 
     private void setSkip(boolean on) {

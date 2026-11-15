@@ -45,24 +45,35 @@ import java.util.List;
 public class LauncherActivity extends Activity {
     private static final int REQ_TREE = 1;
     private static final int REQ_PERM = 2;
-    private static final String PREFS = "games";
+    private static final String PREFS = "launcher";
 
-    static class Game {
-        String name;
-        String path;
-        boolean korean;
-        String note;
-    }
+    // games supported by the engine: id (--game=), name shown, note
+    static final String[][] GAMES = {
+        { "hanahebi",           "꽃과뱀 (花と蛇)",                 "한글패치판·일본어판 자동 감지" },
+        { "isaku-korean",       "유작 한글판",                      "Isaku98.ini, Patch 폴더" },
+        { "isaku",              "유작 리뉴얼 (일본어판)",           "" },
+        { "shuusaku-korean",    "취작 한글판",                      "시험 중" },
+        { "shuusaku",           "취작 (일본어판)",                  "" },
+        { "doukyuusei2-korean", "동급생2 한글판",                   "시험 중" },
+        { "doukyuusei2",        "동급생2 (일본어판)",               "" },
+        { "doukyuusei",         "동급생 Windows판",                 "" },
+        { "kakyuusei",          "하급생",                           "" },
+        { "aishimai",           "애자매 ～두 사람의 과실～",        "" },
+        { "yuno",               "YU-NO (일본어판)",                 "" },
+        { "yuno-eng",           "YU-NO (영문 패치판)",              "" },
+        { "beyond",             "비욘드 (ビ・ヨンド)",              "" },
+        { "shangrlia",          "샹그릴라 (SHANGRLIA)",             "" },
+    };
 
-    private final List<Game> games = new ArrayList<>();
     private ArrayAdapter<String> adapter;
     private TextView status;
+    private Button permButton;
+    private int pickingFor = -1;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         copyFonts();
-        loadGames();
         buildUi();
     }
 
@@ -72,93 +83,131 @@ public class LauncherActivity extends Activity {
         updateStatus();
     }
 
+    private SharedPreferences prefs() {
+        return getSharedPreferences(PREFS, MODE_PRIVATE);
+    }
+
+    private String folderOf(int i) {
+        return prefs().getString("folder." + GAMES[i][0], null);
+    }
+
+    private void setFolder(int i, String path) {
+        SharedPreferences.Editor e = prefs().edit();
+        if (path == null)
+            e.remove("folder." + GAMES[i][0]);
+        else
+            e.putString("folder." + GAMES[i][0], path);
+        e.apply();
+        adapter.notifyDataSetChanged();
+    }
+
     // ---------------------------------------------------------------- UI
 
     private void buildUi() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(32, 32, 32, 32);
         root.setBackgroundColor(0xFF1A0A0E);
+        // Android 15 draws apps under the status/navigation bars: keep the
+        // content inside them
+        root.setOnApplyWindowInsetsListener((v, insets) -> {
+            v.setPadding(24 + insets.getSystemWindowInsetLeft(),
+                    16 + insets.getSystemWindowInsetTop(),
+                    24 + insets.getSystemWindowInsetRight(),
+                    16 + insets.getSystemWindowInsetBottom());
+            return insets.consumeSystemWindowInsets();
+        });
 
         TextView title = new TextView(this);
         title.setText("AI5 런처");
-        title.setTextSize(26);
+        title.setTextSize(24);
         title.setTextColor(0xFFF4E8C0);
         root.addView(title);
 
         TextView info = new TextView(this);
-        info.setText("elf AI5WIN 게임(유작·취작·동급생·동급생2·하급생·애자매·YU-NO·꽃과뱀 등, "
-                + "일본어판·한글판)을 실행합니다. 게임 파일은 APK에 들어 있지 않습니다. "
-                + "게임 폴더를 휴대폰 저장소에 넣고 \"게임 폴더 추가\"로 고르세요.");
+        info.setText("지원하는 elf 게임 목록입니다. 게임을 누르고 그 게임 폴더를 고르세요"
+                + " (AI5WIN.EXE가 있는 폴더). 게임 파일은 APK에 들어 있지 않습니다.");
         info.setTextColor(0xFFCCCCCC);
-        info.setPadding(0, 12, 0, 12);
+        info.setPadding(0, 8, 0, 8);
         root.addView(info);
 
         status = new TextView(this);
         status.setTextColor(0xFFFF8080);
         root.addView(status);
 
-        LinearLayout buttons = new LinearLayout(this);
-        buttons.setOrientation(LinearLayout.HORIZONTAL);
-        Button add = new Button(this);
-        add.setText("게임 폴더 추가");
-        add.setOnClickListener(v -> addGame());
-        buttons.addView(add);
-        Button perm = new Button(this);
-        perm.setText("저장소 권한");
-        perm.setOnClickListener(v -> requestStorage());
-        buttons.addView(perm);
-        root.addView(buttons);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        permButton = new Button(this);
+        permButton.setText("저장소 권한 허용");
+        permButton.setOnClickListener(v -> requestStorage());
+        row.addView(permButton);
+        CheckBox stretch = new CheckBox(this);
+        stretch.setText("화면 꽉 채우기 (늘리기)");
+        stretch.setTextColor(Color.WHITE);
+        stretch.setChecked(prefs().getBoolean("stretch", true));
+        stretch.setOnCheckedChangeListener((b, on) ->
+                prefs().edit().putBoolean("stretch", on).apply());
+        row.addView(stretch);
+        root.addView(row);
 
         ListView list = new ListView(this);
         adapter = new ArrayAdapter<String>(this, android.R.layout.simple_list_item_2,
                 android.R.id.text1) {
             @Override
+            public int getCount() {
+                return GAMES.length;
+            }
+
+            @Override
             public View getView(int pos, View convert, ViewGroup parent) {
                 View v = super.getView(pos, convert, parent);
-                Game g = games.get(pos);
                 TextView t1 = v.findViewById(android.R.id.text1);
                 TextView t2 = v.findViewById(android.R.id.text2);
-                t1.setText(g.name + (g.korean ? "  [한글판]" : ""));
-                t1.setTextColor(Color.WHITE);
-                t2.setText(g.path + (g.note != null && !g.note.isEmpty() ? "\n" + g.note : ""));
-                t2.setTextColor(0xFFAAAAAA);
+                String folder = folderOf(pos);
+                t1.setText(GAMES[pos][1]);
+                t1.setTextColor(folder != null ? Color.WHITE : 0xFF999999);
+                String note = GAMES[pos][2].isEmpty() ? "" : "  (" + GAMES[pos][2] + ")";
+                t2.setText((folder != null ? folder : "폴더 미지정 — 눌러서 게임 폴더 고르기") + note);
+                t2.setTextColor(folder != null ? 0xFF9AD29A : 0xFF888888);
                 return v;
             }
         };
+        for (String[] g : GAMES)
+            adapter.add(g[1]);
         list.setAdapter(adapter);
-        list.setOnItemClickListener((p, v, pos, id) -> startGame(games.get(pos)));
+        list.setOnItemClickListener((p, v, pos, id) -> {
+            if (folderOf(pos) == null)
+                pickFolder(pos);
+            else
+                startGame(pos);
+        });
         list.setOnItemLongClickListener((p, v, pos, id) -> {
             editGame(pos);
             return true;
         });
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1);
-        root.addView(list, lp);
+        root.addView(list, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
 
         TextView hint = new TextView(this);
-        hint.setText("누르면 실행, 길게 누르면 이름 바꾸기·한글판 설정·삭제. "
-                + "게임 중: 화면 터치 = 클릭, 두 손가락 탭·뒤로 가기·[메뉴] = 오른쪽 클릭(메뉴/취소), "
-                + "[넘기기] = 대사 빨리 넘기기. 꽃과뱀 한글판은 자동으로 감지됩니다.");
+        hint.setText("길게 누르면 폴더 바꾸기·지정 해제. 게임 중: 터치 = 클릭, 두 손가락 탭·뒤로 가기·[메뉴]"
+                + " = 오른쪽 클릭(메뉴/취소), [넘기기] = 대사 빨리 넘기기.");
         hint.setTextColor(0xFF999999);
         hint.setTextSize(12);
         root.addView(hint);
 
         setContentView(root);
-        refresh();
-    }
-
-    private void refresh() {
-        adapter.clear();
-        for (Game g : games)
-            adapter.add(g.name);
-        adapter.notifyDataSetChanged();
     }
 
     private void updateStatus() {
-        if (status == null)
-            return;
-        status.setText(hasStorage() ? "" : "저장소 권한이 필요합니다. [저장소 권한]을 눌러 허용하세요.");
+        boolean ok = hasStorage();
+        if (status != null)
+            status.setText(ok ? "" : "저장소 권한이 필요합니다. [저장소 권한 허용]을 눌러 \"모든 파일 접근\"을 허용하세요.");
+        if (permButton != null)
+            permButton.setVisibility(ok ? View.GONE : View.VISIBLE);
+    }
+
+    private void status(String s) {
+        if (status != null)
+            status.setText(s);
     }
 
     // ---------------------------------------------------------------- storage
@@ -175,9 +224,8 @@ public class LauncherActivity extends Activity {
     private void requestStorage() {
         if (Build.VERSION.SDK_INT >= 30) {
             try {
-                Intent i = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                        Uri.parse("package:" + getPackageName()));
-                startActivity(i);
+                startActivity(new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                        Uri.parse("package:" + getPackageName())));
             } catch (Exception e) {
                 startActivity(new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION));
             }
@@ -222,71 +270,31 @@ public class LauncherActivity extends Activity {
         }
     }
 
-    private void status(String s) {
-        if (status != null)
-            status.setText(s);
-    }
+    // ---------------------------------------------------------------- folders
 
-    // ---------------------------------------------------------------- games
-
-    private void loadGames() {
-        games.clear();
-        SharedPreferences p = getSharedPreferences(PREFS, MODE_PRIVATE);
-        try {
-            JSONArray a = new JSONArray(p.getString("list", "[]"));
-            for (int i = 0; i < a.length(); i++) {
-                JSONObject o = a.getJSONObject(i);
-                Game g = new Game();
-                g.name = o.getString("name");
-                g.path = o.getString("path");
-                g.korean = o.optBoolean("korean");
-                g.note = o.optString("note");
-                games.add(g);
-            }
-        } catch (Exception e) {
-            // start with an empty list
-        }
-    }
-
-    private void saveGames() {
-        JSONArray a = new JSONArray();
-        try {
-            for (Game g : games) {
-                JSONObject o = new JSONObject();
-                o.put("name", g.name);
-                o.put("path", g.path);
-                o.put("korean", g.korean);
-                o.put("note", g.note);
-                a.put(o);
-            }
-        } catch (Exception e) {
-            return;
-        }
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("list", a.toString()).apply();
-    }
-
-    private void addGame() {
+    private void pickFolder(int game) {
         if (!hasStorage()) {
             requestStorage();
             return;
         }
-        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        pickingFor = game;
         try {
-            startActivityForResult(i, REQ_TREE);
+            startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQ_TREE);
         } catch (Exception e) {
-            askPath();
+            askPath(game);
         }
     }
 
     // fallback when there is no folder picker: type the path
-    private void askPath() {
+    private void askPath(int game) {
         EditText e = new EditText(this);
         e.setInputType(InputType.TYPE_CLASS_TEXT);
-        e.setText(Environment.getExternalStorageDirectory().getAbsolutePath() + "/");
+        String cur = folderOf(game);
+        e.setText(cur != null ? cur : Environment.getExternalStorageDirectory().getAbsolutePath() + "/");
         new AlertDialog.Builder(this)
-                .setTitle("게임 폴더 경로")
+                .setTitle(GAMES[game][1] + " 폴더 경로")
                 .setView(e)
-                .setPositiveButton("확인", (d, w) -> addFolder(new File(e.getText().toString().trim())))
+                .setPositiveButton("확인", (d, w) -> assign(game, new File(e.getText().toString().trim())))
                 .setNegativeButton("취소", null)
                 .show();
     }
@@ -294,15 +302,16 @@ public class LauncherActivity extends Activity {
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
-        if (req != REQ_TREE || res != RESULT_OK || data == null || data.getData() == null)
+        if (req != REQ_TREE || res != RESULT_OK || data == null || data.getData() == null
+                || pickingFor < 0)
             return;
         File dir = treeUriToFile(data.getData());
         if (dir == null) {
-            status("이 폴더는 경로로 바꿀 수 없습니다. 내부 저장소나 SD 카드의 폴더를 고르세요.");
-            askPath();
+            status("이 폴더는 경로로 바꿀 수 없습니다. 경로를 직접 입력하세요.");
+            askPath(pickingFor);
             return;
         }
-        addFolder(dir);
+        assign(pickingFor, dir);
     }
 
     // content://.../tree/primary:Games/hanahebi -> /storage/emulated/0/Games/hanahebi
@@ -322,133 +331,72 @@ public class LauncherActivity extends Activity {
         }
     }
 
-    private static File findIcase(File dir, String name) {
-        String[] list = dir.list();
-        if (list == null)
-            return null;
-        for (String n : list) {
-            if (n.equalsIgnoreCase(name))
-                return new File(dir, n);
-        }
-        return null;
-    }
-
-    private static boolean hasSuffix(File dir, String suffix) {
+    private static boolean hasFile(File dir, String name) {
         String[] list = dir.list();
         if (list == null)
             return false;
         for (String n : list) {
-            if (n.toUpperCase().endsWith(suffix))
+            if (n.equalsIgnoreCase(name))
                 return true;
         }
         return false;
     }
 
-    // TITLE= from the game's INI (Shift-JIS)
-    private static String iniTitle(File dir) {
-        String[] list = dir.list();
-        if (list == null)
-            return null;
-        for (String n : list) {
-            if (!n.toUpperCase().endsWith(".INI"))
-                continue;
-            try (BufferedReader r = new BufferedReader(new InputStreamReader(
-                    new FileInputStream(new File(dir, n)), Charset.forName("Shift_JIS")))) {
-                String line;
-                while ((line = r.readLine()) != null) {
-                    line = line.trim();
-                    if (line.toUpperCase().startsWith("TITLE="))
-                        return line.substring(6).trim();
-                }
-            } catch (Exception e) {
-                // ignore
-            }
-        }
-        return null;
-    }
-
-    private void addFolder(File dir) {
+    private void assign(int game, File dir) {
         if (!dir.isDirectory() || dir.list() == null) {
-            status("폴더를 읽을 수 없습니다: " + dir + "\n(저장소 권한을 확인하세요)");
+            status("폴더를 읽을 수 없습니다: " + dir + " (저장소 권한을 확인하세요)");
             return;
         }
-        Game g = new Game();
-        g.path = dir.getAbsolutePath();
-        g.name = dir.getName();
-        g.note = "";
-        if (findIcase(dir, "AI6WIN.exe") != null && findIcase(dir, "AI5WIN.EXE") == null) {
+        String id = GAMES[game][0];
+        String warn = null;
+        if (hasFile(dir, "AI6WIN.exe") && !hasFile(dir, "AI5WIN.EXE"))
+            warn = "AI6WIN 게임(예: 귀작)은 지원하지 않습니다.";
+        else if (id.equals("hanahebi") && !hasFile(dir, "HH2D.exe"))
+            warn = "꽃과뱀 폴더에는 HH2D.exe가 있어야 합니다.";
+        else if (!hasFile(dir, "AI5WIN.EXE") && !hasFile(dir, "HH2D.exe"))
+            warn = "AI5WIN.EXE가 없습니다. 게임 폴더가 맞는지 확인하세요.";
+        else if (id.equals("isaku-korean") && !hasFile(dir, "Isaku98.ini"))
+            warn = "유작 한글판 폴더에는 Isaku98.ini가 있어야 합니다.";
+        setFolder(game, dir.getAbsolutePath());
+        status("");
+        if (warn != null) {
             new AlertDialog.Builder(this)
-                    .setMessage("AI6WIN 게임(예: 귀작)은 아직 지원하지 않습니다.")
-                    .setPositiveButton("확인", null).show();
-            return;
+                    .setTitle(GAMES[game][1])
+                    .setMessage(warn + "\n\n" + dir.getAbsolutePath())
+                    .setPositiveButton("확인", null)
+                    .show();
         }
-        if (findIcase(dir, "HH2D.exe") != null) {
-            g.name = "꽃과뱀 (花と蛇)";
-            g.korean = findIcase(dir, "AI5WIN.EXE.bak") != null;
-        } else {
-            String t = iniTitle(dir);
-            if (t != null && !t.isEmpty())
-                g.name = dir.getName() + " (" + t + ")";
-            g.korean = findIcase(dir, "Isaku98.ini") != null || hasSuffix(dir, ".KOR")
-                    || findIcase(dir, "PATCH") != null;
-        }
-        if (findIcase(dir, "AI5WIN.EXE") == null && findIcase(dir, "HH2D.exe") == null
-                && findIcase(dir, "AIWIN.EXE") == null)
-            g.note = "AI5WIN.EXE가 없습니다. 게임 폴더가 맞는지 확인하세요.";
-        games.add(g);
-        saveGames();
-        refresh();
-        editGame(games.size() - 1);
     }
 
-    private void editGame(int pos) {
-        Game g = games.get(pos);
-        LinearLayout l = new LinearLayout(this);
-        l.setOrientation(LinearLayout.VERTICAL);
-        l.setPadding(40, 20, 40, 0);
-        EditText name = new EditText(this);
-        name.setText(g.name);
-        l.addView(name);
-        CheckBox korean = new CheckBox(this);
-        korean.setText("한글판 (CP949 대사, 한글 글꼴, PATCH 폴더)");
-        korean.setChecked(g.korean);
-        l.addView(korean);
-        TextView path = new TextView(this);
-        path.setText(g.path);
-        l.addView(path);
+    private void editGame(int game) {
+        String[] items = { "게임 폴더 바꾸기", "폴더 경로 직접 입력", "폴더 지정 해제" };
         new AlertDialog.Builder(this)
-                .setTitle("게임 설정")
-                .setView(l)
-                .setPositiveButton("저장", (d, w) -> {
-                    g.name = name.getText().toString();
-                    g.korean = korean.isChecked();
-                    saveGames();
-                    refresh();
+                .setTitle(GAMES[game][1])
+                .setItems(items, (d, which) -> {
+                    if (which == 0)
+                        pickFolder(game);
+                    else if (which == 1)
+                        askPath(game);
+                    else
+                        setFolder(game, null);
                 })
-                .setNeutralButton("삭제", (d, w) -> {
-                    games.remove(pos);
-                    saveGames();
-                    refresh();
-                })
-                .setNegativeButton("취소", null)
                 .show();
     }
 
-    private void startGame(Game g) {
+    private void startGame(int game) {
         if (!hasStorage()) {
             requestStorage();
             return;
         }
-        if (!new File(g.path).isDirectory()) {
-            status("폴더가 없습니다: " + g.path);
+        String folder = folderOf(game);
+        if (folder == null || !new File(folder).isDirectory()) {
+            status("폴더가 없습니다: " + folder);
             return;
         }
         Intent i = new Intent(this, GameActivity.class);
-        i.putExtra(GameActivity.EXTRA_PATH, g.path);
-        ArrayList<String> args = new ArrayList<>();
-        if (g.korean)
-            args.add("--korean");
-        i.putExtra(GameActivity.EXTRA_ARGS, args.toArray(new String[0]));
+        i.putExtra(GameActivity.EXTRA_PATH, folder);
+        i.putExtra(GameActivity.EXTRA_ARGS, new String[] { "--game=" + GAMES[game][0] });
+        i.putExtra(GameActivity.EXTRA_STRETCH, prefs().getBoolean("stretch", true));
         startActivity(i);
     }
 }
