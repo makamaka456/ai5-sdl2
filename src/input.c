@@ -405,6 +405,9 @@ void handle_events(void)
 		}
 	}
 	controller_update_analog();
+#ifdef __ANDROID__
+	controller_env_apply();
+#endif
 }
 
 void vm_delay(int ms)

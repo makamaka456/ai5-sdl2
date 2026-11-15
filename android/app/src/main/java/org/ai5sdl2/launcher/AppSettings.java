@@ -9,10 +9,15 @@ import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
+import android.text.InputType;
+import android.widget.EditText;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Map;
 
 final class AppSettings {
     private AppSettings() {}
@@ -90,7 +95,8 @@ final class AppSettings {
         "NONE", "ESCAPE", "NONE", "NONE", "UP", "DOWN", "LEFT", "RIGHT",
     };
     static final String[][] PAD_ACTIONS = {
-        { "ENTER", "결정 / 클릭 (Enter)" }, { "ESCAPE", "메뉴 / 취소 (오른쪽 클릭)" },
+        { "LMOUSE", "마우스 왼쪽 클릭" }, { "RMOUSE", "마우스 오른쪽 클릭" },
+        { "ENTER", "결정 (Enter)" }, { "ESCAPE", "메뉴 / 취소 (ESC)" },
         { "CTRL", "넘기기 (누르는 동안 Ctrl)" }, { "SPACE", "대사창 숨기기 (Space)" },
         { "BACKSPACE", "지난 대사 (Backspace)" }, { "SHIFT", "화면 효과 빨리 (Shift)" },
         { "UP", "위" }, { "DOWN", "아래" }, { "LEFT", "왼쪽" }, { "RIGHT", "오른쪽" },
@@ -124,71 +130,170 @@ final class AppSettings {
         return sb.toString();
     }
 
-    static void padSettings(Activity a, String note) {
+    // gamepad settings; onChange runs after every change (the game applies it at once)
+    static void padSettings(Activity a, Runnable onChange) {
         SharedPreferences p = prefs(a);
         int n = PAD_BUTTONS.length;
-        String[] items = new String[n + 4];
+        String[] items = new String[n + 6];
         for (int i = 0; i < n; i++)
             items[i] = PAD_BUTTONS[i][1] + "  →  " + label(PAD_ACTIONS, padValue(a, i));
         items[n] = "왼쪽 스틱  →  " + label(STICK_MODES, p.getString("pad.LEFTANALOG", "CURSOR"));
         items[n + 1] = "오른쪽 스틱  →  " + label(STICK_MODES, p.getString("pad.RIGHTANALOG", "DPAD"));
         items[n + 2] = "커서 속도  →  " + p.getString("pad.CURSORSPEED", "16");
-        items[n + 3] = "기본값으로 되돌리기";
+        items[n + 3] = "★ 프리셋 저장";
+        items[n + 4] = "★ 프리셋 불러오기 / 지우기";
+        items[n + 5] = "기본값으로 되돌리기";
         new AlertDialog.Builder(a)
-                .setTitle("게임패드 버튼 설정" + (note != null ? " " + note : ""))
+                .setTitle("키맵핑 (게임패드) — 바로 적용")
                 .setItems(items, (d, which) -> {
                     if (which < n) {
-                        chooseAction(a, which, note);
+                        chooseAction(a, which, onChange);
                     } else if (which == n || which == n + 1) {
-                        chooseStick(a, which == n ? "pad.LEFTANALOG" : "pad.RIGHTANALOG", note);
+                        chooseStick(a, which == n ? "pad.LEFTANALOG" : "pad.RIGHTANALOG", onChange);
                     } else if (which == n + 2) {
-                        chooseSpeed(a, note);
+                        chooseSpeed(a, onChange);
+                    } else if (which == n + 3) {
+                        askName(a, "게임패드 프리셋 저장", name -> {
+                            prefs(a).edit().putString("padpreset." + name, padSerialize(a)).apply();
+                            padSettings(a, onChange);
+                        });
+                    } else if (which == n + 4) {
+                        choosePreset(a, "padpreset.", "게임패드 프리셋", v -> {
+                            padDeserialize(a, v);
+                            changed(onChange);
+                            padSettings(a, onChange);
+                        }, () -> padSettings(a, onChange));
                     } else {
                         SharedPreferences.Editor e = p.edit();
                         for (String k : p.getAll().keySet()) {
                             if (k.startsWith("pad."))
                                 e.remove(k);
                         }
-                        e.apply();
-                        padSettings(a, note);
+                        e.commit();
+                        changed(onChange);
+                        padSettings(a, onChange);
                     }
                 })
                 .setNegativeButton("닫기", null)
                 .show();
     }
 
-    private static void chooseAction(Activity a, int button, String note) {
+    private static void changed(Runnable onChange) {
+        if (onChange != null)
+            onChange.run();
+    }
+
+    // all pad.* keys as "key=value;key=value"
+    static String padSerialize(Context c) {
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, ?> e : prefs(c).getAll().entrySet()) {
+            if (e.getKey().startsWith("pad.") && e.getValue() instanceof String)
+                sb.append(e.getKey()).append('=').append(e.getValue()).append(';');
+        }
+        return sb.toString();
+    }
+
+    static void padDeserialize(Context c, String v) {
+        SharedPreferences.Editor e = prefs(c).edit();
+        for (String k : prefs(c).getAll().keySet()) {
+            if (k.startsWith("pad."))
+                e.remove(k);
+        }
+        for (String kv : v.split(";")) {
+            int eq = kv.indexOf('=');
+            if (eq > 0 && kv.startsWith("pad."))
+                e.putString(kv.substring(0, eq), kv.substring(eq + 1));
+        }
+        e.commit();
+    }
+
+    interface StringCallback {
+        void run(String s);
+    }
+
+    // ask for a preset name
+    static void askName(Activity a, String title, StringCallback done) {
+        EditText t = new EditText(a);
+        t.setInputType(InputType.TYPE_CLASS_TEXT);
+        t.setHint("이름 (예: 레트로이드)");
+        new AlertDialog.Builder(a)
+                .setTitle(title)
+                .setView(t)
+                .setPositiveButton("저장", (d, w) -> {
+                    String name = t.getText().toString().trim().replace(";", "").replace("=", "");
+                    if (!name.isEmpty())
+                        done.run(name);
+                })
+                .setNegativeButton("취소", null)
+                .show();
+    }
+
+    // list presets stored under prefix; tap = load, long list entry "지우기" mode via button
+    static void choosePreset(Activity a, String prefix, String title, StringCallback load, Runnable back) {
+        ArrayList<String> names = new ArrayList<>();
+        for (String k : prefs(a).getAll().keySet()) {
+            if (k.startsWith(prefix))
+                names.add(k.substring(prefix.length()));
+        }
+        Collections.sort(names);
+        if (names.isEmpty()) {
+            new AlertDialog.Builder(a)
+                    .setMessage("저장된 프리셋이 없습니다.")
+                    .setPositiveButton("확인", (d, w) -> { if (back != null) back.run(); })
+                    .show();
+            return;
+        }
+        String[] arr = names.toArray(new String[0]);
+        new AlertDialog.Builder(a)
+                .setTitle(title + " 불러오기")
+                .setItems(arr, (d, w) -> load.run(prefs(a).getString(prefix + arr[w], "")))
+                .setNeutralButton("지우기…", (d, w) -> new AlertDialog.Builder(a)
+                        .setTitle(title + " 지우기")
+                        .setItems(arr, (d2, w2) -> {
+                            prefs(a).edit().remove(prefix + arr[w2]).apply();
+                            if (back != null) back.run();
+                        })
+                        .setNegativeButton("취소", null)
+                        .show())
+                .setNegativeButton("닫기", (d, w) -> { if (back != null) back.run(); })
+                .show();
+    }
+
+    private static void chooseAction(Activity a, int button, Runnable onChange) {
         String[] labels = new String[PAD_ACTIONS.length];
         for (int i = 0; i < labels.length; i++)
             labels[i] = PAD_ACTIONS[i][1];
         new AlertDialog.Builder(a)
                 .setTitle(PAD_BUTTONS[button][1] + " 버튼")
                 .setItems(labels, (d, which) -> {
-                    prefs(a).edit().putString("pad." + PAD_BUTTONS[button][0], PAD_ACTIONS[which][0]).apply();
-                    padSettings(a, note);
+                    prefs(a).edit().putString("pad." + PAD_BUTTONS[button][0], PAD_ACTIONS[which][0]).commit();
+                    changed(onChange);
+                    padSettings(a, onChange);
                 })
                 .show();
     }
 
-    private static void chooseStick(Activity a, String key, String note) {
+    private static void chooseStick(Activity a, String key, Runnable onChange) {
         String[] labels = new String[STICK_MODES.length];
         for (int i = 0; i < labels.length; i++)
             labels[i] = STICK_MODES[i][1];
         new AlertDialog.Builder(a)
                 .setItems(labels, (d, which) -> {
-                    prefs(a).edit().putString(key, STICK_MODES[which][0]).apply();
-                    padSettings(a, note);
+                    prefs(a).edit().putString(key, STICK_MODES[which][0]).commit();
+                    changed(onChange);
+                    padSettings(a, onChange);
                 })
                 .show();
     }
 
-    private static void chooseSpeed(Activity a, String note) {
+    private static void chooseSpeed(Activity a, Runnable onChange) {
         String[] speeds = { "8", "12", "16", "24", "32" };
         new AlertDialog.Builder(a)
                 .setTitle("커서 속도")
                 .setItems(speeds, (d, which) -> {
-                    prefs(a).edit().putString("pad.CURSORSPEED", speeds[which]).apply();
-                    padSettings(a, note);
+                    prefs(a).edit().putString("pad.CURSORSPEED", speeds[which]).commit();
+                    changed(onChange);
+                    padSettings(a, onChange);
                 })
                 .show();
     }

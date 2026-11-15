@@ -19,6 +19,7 @@ import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.SeekBar;
@@ -27,6 +28,7 @@ import android.widget.TextView;
 import org.libsdl.app.SDLActivity;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 
 public class GameActivity extends SDLActivity {
     public static final String EXTRA_PATH = "path";
@@ -34,24 +36,62 @@ public class GameActivity extends SDLActivity {
     public static final String EXTRA_GAME = "game";
     private static final int REQ_IMAGE = 10;
 
-    // on-screen buttons: id, label, default position (fraction of the screen)
+    // on-screen buttons: id, label, default side, default y (fraction of the screen), hidden by default
     private static final String[][] BUTTONS = {
-        { "menu",  "메뉴",      "right", "0.22" },
-        { "skip",  "넘기기",    "right", "0.42" },
-        { "gear",  "⚙",        "right", "0.78" },
-        { "hide",  "숨기기",    "left",  "0.30" },
-        { "log",   "지난 대사", "left",  "0.55" },
-        { "enter", "결정",      "right", "0.62" },  // optional
-        { "shift", "효과 빨리", "left",  "0.80" },  // optional
+        { "menu",  "메뉴",      "right", "0.22", "0" },
+        { "skip",  "넘기기",    "right", "0.42", "0" },
+        { "gear",  "⚙",        "right", "0.78", "0" },
+        { "hide",  "숨기기",    "left",  "0.30", "0" },
+        { "log",   "지난 대사", "left",  "0.55", "0" },
+        { "enter", "결정",      "right", "0.62", "1" },
+        { "shift", "효과 빨리", "left",  "0.80", "1" },
     };
+
+    // settings of one button (position as a fraction of the screen, -1 = default)
+    private static class BtnCfg {
+        float x = -1, y = -1;
+        int alpha = 70;     // 10..100 %
+        int size = 100;     // 60..200 %
+        boolean hidden;
+
+        BtnCfg copy() {
+            BtnCfg c = new BtnCfg();
+            c.x = x; c.y = y; c.alpha = alpha; c.size = size; c.hidden = hidden;
+            return c;
+        }
+
+        String serialize() {
+            return x + "," + y + "," + alpha + "," + size + "," + (hidden ? 1 : 0);
+        }
+
+        static BtnCfg parse(String v, BtnCfg def) {
+            BtnCfg c = def.copy();
+            try {
+                String[] f = v.split(",");
+                c.x = Float.parseFloat(f[0]); c.y = Float.parseFloat(f[1]);
+                c.alpha = Integer.parseInt(f[2]); c.size = Integer.parseInt(f[3]);
+                c.hidden = f[4].equals("1");
+            } catch (Exception e) {
+                // keep defaults
+            }
+            return c;
+        }
+    }
 
     private FrameLayout overlay;
     private final ArrayList<Button> buttons = new ArrayList<>();
     private Button skipButton;
     private boolean ctrlHeld = false;
+
+    // button editor: changes are kept here until [적용]
     private boolean editing = false;
-    private boolean hidden = false;
-    private TextView editHint;
+    private final HashMap<String, BtnCfg> stage = new HashMap<>();
+    private String selected;
+    private LinearLayout editBar, editPanel;
+    private TextView panelTitle;
+    private SeekBar alphaBar, sizeBar;
+    private CheckBox hideBox;
+    private boolean panelUpdating;
 
     private String gameId() {
         String g = getIntent().getStringExtra(EXTRA_GAME);
@@ -72,7 +112,7 @@ public class GameActivity extends SDLActivity {
         // fonts are copied to <files>/fonts by the launcher
         nativeSetenv("AI5_DATA_DIR", getFilesDir().getAbsolutePath());
         nativeSetenv("SDL_ANDROID_TRAP_BACK_BUTTON", "1");
-        nativeSetenv("AI5_CONTROLLER", AppSettings.controllerConfig(this));
+        applyPadSettings();
         applyDisplaySettings();
         ArrayList<String> args = new ArrayList<>();
         String[] extra = getIntent().getStringArrayExtra(EXTRA_ARGS);
@@ -90,6 +130,10 @@ public class GameActivity extends SDLActivity {
         nativeSetenv("AI5_BACKGROUND", AppSettings.backgroundPath(this, gameId()));
     }
 
+    private void applyPadSettings() {
+        nativeSetenv("AI5_CONTROLLER", AppSettings.controllerConfig(this));
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -101,8 +145,12 @@ public class GameActivity extends SDLActivity {
             getWindow().setAttributes(lp);
         }
         hideSystemBars();
-        if (mLayout != null)
+        if (mLayout != null) {
             addControls();
+            // CI screenshot of the button editor
+            if (getIntent().getBooleanExtra("debug_edit", false))
+                overlay.postDelayed(() -> { startEditing(); select("skip"); }, 3000);
+        }
     }
 
     // full screen: hide the status and navigation bars (swipe to show them)
@@ -138,40 +186,64 @@ public class GameActivity extends SDLActivity {
                 getResources().getDisplayMetrics());
     }
 
-    // button size: 0 small, 1 normal, 2 large, 3 very large
-    private float sizeScale() {
-        float[] s = { 0.8f, 1.0f, 1.3f, 1.6f };
-        int i = prefs().getInt("btn.size", 1);
-        return s[Math.max(0, Math.min(3, i))];
+    private static String[] def(String id) {
+        for (String[] d : BUTTONS) {
+            if (d[0].equals(id))
+                return d;
+        }
+        return BUTTONS[0];
     }
 
-    private float alpha() {
-        return prefs().getInt("btn.alpha", 70) / 100f;
+    private static BtnCfg defaultCfg(String id) {
+        BtnCfg c = new BtnCfg();
+        c.hidden = def(id)[4].equals("1");
+        return c;
     }
 
-    private boolean extrasShown() {
-        return prefs().getBoolean("btn.extra", false);
+    // saved settings of a button (older versions kept global size/alpha)
+    private BtnCfg savedCfg(String id) {
+        SharedPreferences p = prefs();
+        String v = p.getString("btn." + id, null);
+        if (v != null)
+            return BtnCfg.parse(v, defaultCfg(id));
+        BtnCfg c = defaultCfg(id);
+        c.x = p.getFloat("btn.pos." + id + ".x", -1);
+        c.y = p.getFloat("btn.pos." + id + ".y", -1);
+        c.alpha = p.getInt("btn.alpha", 70);
+        float[] sizes = { 80, 100, 130, 160 };
+        c.size = (int) sizes[Math.max(0, Math.min(3, p.getInt("btn.size", 1)))];
+        if (id.equals("enter") || id.equals("shift"))
+            c.hidden = !p.getBoolean("btn.extra", false);
+        return c;
     }
 
-    private Button makeButton(String id, String text) {
+    private BtnCfg cfg(String id) {
+        return editing && stage.containsKey(id) ? stage.get(id) : savedCfg(id);
+    }
+
+    private Button makeButton(String id, String text, BtnCfg c) {
         Button b = new Button(this);
         b.setText(text);
         b.setTag(id);
         b.setTextColor(Color.WHITE);
         b.setAllCaps(false);
-        float s = sizeScale();
+        float s = c.size / 100f;
         b.setTextSize(TypedValue.COMPLEX_UNIT_SP, (id.equals("gear") ? 26 : 18) * s);
         b.setPadding(dp(14 * s), dp(8 * s), dp(14 * s), dp(8 * s));
         b.setMinWidth(dp(72 * s));
         b.setMinHeight(dp(52 * s));
         b.setMinimumWidth(dp(72 * s));
         b.setMinimumHeight(dp(52 * s));
+        boolean sel = editing && id.equals(selected);
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(0xCC000000);
-        bg.setStroke(dp(2), 0xFFC03030);
+        bg.setStroke(dp(sel ? 4 : 2), sel ? 0xFFFFD040 : 0xFFC03030);
         bg.setCornerRadius(dp(14));
         b.setBackground(bg);
-        b.setAlpha(alpha());
+        if (editing)
+            b.setAlpha(c.hidden ? 0.3f : 1.0f);   // in the editor: shown = dark, hidden = faint
+        else
+            b.setAlpha(c.alpha / 100f);
         return b;
     }
 
@@ -210,20 +282,20 @@ public class GameActivity extends SDLActivity {
         for (Button b : buttons)
             overlay.removeView(b);
         buttons.clear();
-        for (String[] def : BUTTONS) {
-            boolean optional = def[0].equals("enter") || def[0].equals("shift");
-            if (optional && !extrasShown())
+        skipButton = null;
+        for (String[] d : BUTTONS) {
+            BtnCfg c = cfg(d[0]);
+            if (c.hidden && !editing)
                 continue;
-            Button b = makeButton(def[0], def[0].equals("skip") && ctrlHeld ? "넘기기 ■" : def[1]);
-            if (def[0].equals("skip"))
+            Button b = makeButton(d[0], d[0].equals("skip") && ctrlHeld ? "넘기기 ■" : d[1], c);
+            if (d[0].equals("skip"))
                 skipButton = b;
             b.setOnClickListener(v -> onButton((String) v.getTag()));
             b.setOnTouchListener(this::dragTouch);
-            overlay.addView(b, new FrameLayout.LayoutParams(
+            overlay.addView(b, 0, new FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             buttons.add(b);
         }
-        overlay.setVisibility(hidden ? View.GONE : View.VISIBLE);
         overlay.post(this::placeButtons);
     }
 
@@ -235,78 +307,282 @@ public class GameActivity extends SDLActivity {
         int margin = dp(10);
         for (Button b : buttons) {
             String id = (String) b.getTag();
-            String[] def = null;
-            for (String[] d : BUTTONS) {
-                if (d[0].equals(id))
-                    def = d;
-            }
-            if (def == null)
-                continue;
+            String[] d = def(id);
+            BtnCfg c = cfg(id);
             int bw = b.getWidth() > 0 ? b.getWidth() : b.getMeasuredWidth();
             int bh = b.getHeight() > 0 ? b.getHeight() : b.getMeasuredHeight();
-            float fx = prefs().getFloat("btn.pos." + id + ".x", -1);
-            float fy = prefs().getFloat("btn.pos." + id + ".y", -1);
             float x, y;
-            if (fx >= 0 && fy >= 0) {
-                x = fx * w - bw / 2f;
-                y = fy * h - bh / 2f;
+            if (c.x >= 0 && c.y >= 0) {
+                x = c.x * w - bw / 2f;
+                y = c.y * h - bh / 2f;
             } else {
-                x = def[2].equals("left") ? margin : w - bw - margin;
-                y = Float.parseFloat(def[3]) * h - bh / 2f;
+                x = d[2].equals("left") ? margin : w - bw - margin;
+                y = Float.parseFloat(d[3]) * h - bh / 2f;
             }
             b.setX(Math.max(0, Math.min(w - bw, x)));
             b.setY(Math.max(0, Math.min(h - bh, y)));
         }
     }
 
-    // in edit mode the buttons can be dragged
-    private float dragDX, dragDY;
+    // ------------------------------------------------------------ button editor
+
+    private float dragDX, dragDY, downX, downY;
+    private boolean dragged;
 
     private boolean dragTouch(View v, MotionEvent e) {
         if (!editing)
             return false;
+        String id = (String) v.getTag();
         switch (e.getActionMasked()) {
         case MotionEvent.ACTION_DOWN:
             dragDX = v.getX() - e.getRawX();
             dragDY = v.getY() - e.getRawY();
+            downX = e.getRawX();
+            downY = e.getRawY();
+            dragged = false;
             return true;
         case MotionEvent.ACTION_MOVE:
-            v.setX(Math.max(0, Math.min(overlay.getWidth() - v.getWidth(), e.getRawX() + dragDX)));
-            v.setY(Math.max(0, Math.min(overlay.getHeight() - v.getHeight(), e.getRawY() + dragDY)));
+            if (Math.abs(e.getRawX() - downX) + Math.abs(e.getRawY() - downY) > dp(8))
+                dragged = true;
+            if (dragged) {
+                v.setX(Math.max(0, Math.min(overlay.getWidth() - v.getWidth(), e.getRawX() + dragDX)));
+                v.setY(Math.max(0, Math.min(overlay.getHeight() - v.getHeight(), e.getRawY() + dragDY)));
+            }
             return true;
         case MotionEvent.ACTION_UP:
-            prefs().edit()
-                    .putFloat("btn.pos." + v.getTag() + ".x", (v.getX() + v.getWidth() / 2f) / overlay.getWidth())
-                    .putFloat("btn.pos." + v.getTag() + ".y", (v.getY() + v.getHeight() / 2f) / overlay.getHeight())
-                    .apply();
+            if (dragged) {
+                BtnCfg c = stage.get(id);
+                c.x = (v.getX() + v.getWidth() / 2f) / overlay.getWidth();
+                c.y = (v.getY() + v.getHeight() / 2f) / overlay.getHeight();
+            }
+            select(id);
             return true;
         }
         return true;
     }
 
     private void startEditing() {
+        if (ctrlHeld)
+            setSkip(false);
         editing = true;
-        hidden = false;
-        overlay.setVisibility(View.VISIBLE);
-        editHint = new TextView(this);
-        editHint.setText("버튼을 끌어서 옮기세요.  [여기를 누르면 완료]");
-        editHint.setTextColor(Color.WHITE);
-        editHint.setTextSize(18);
-        editHint.setBackgroundColor(0xCC802020);
-        editHint.setPadding(dp(16), dp(10), dp(16), dp(10));
-        editHint.setOnClickListener(v -> stopEditing());
+        stage.clear();
+        for (String[] d : BUTTONS)
+            stage.put(d[0], savedCfg(d[0]));
+        selected = null;
+        addEditBar();
+        addEditPanel();
+        buildButtons();
+        updatePanel();
+    }
+
+    private Button barButton(String text, View.OnClickListener l) {
+        Button b = new Button(this);
+        b.setText(text);
+        b.setAllCaps(false);
+        b.setTextColor(Color.WHITE);
+        b.setTextSize(15);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0xEE402020);
+        bg.setStroke(dp(1), 0xFFC03030);
+        bg.setCornerRadius(dp(8));
+        b.setBackground(bg);
+        b.setPadding(dp(12), dp(4), dp(12), dp(4));
+        b.setOnClickListener(l);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(44));
+        lp.setMargins(dp(4), 0, dp(4), 0);
+        b.setLayoutParams(lp);
+        return b;
+    }
+
+    // top bar: apply / cancel / presets / reset
+    private void addEditBar() {
+        editBar = new LinearLayout(this);
+        editBar.setOrientation(LinearLayout.HORIZONTAL);
+        editBar.setGravity(Gravity.CENTER);
+        editBar.setPadding(dp(8), dp(6), dp(8), dp(6));
+        editBar.setBackgroundColor(0xCC000000);
+        Button apply = barButton("✔ 적용", v -> applyEditing());
+        ((GradientDrawable) apply.getBackground()).setColor(0xFFB02828);
+        editBar.addView(apply);
+        editBar.addView(barButton("취소", v -> cancelEditing()));
+        editBar.addView(barButton("프리셋 저장", v -> AppSettings.askName(this, "가상 버튼 프리셋 저장", name ->
+                prefs().edit().putString("btnpreset." + name, serializeStage()).apply())));
+        editBar.addView(barButton("프리셋 불러오기", v -> AppSettings.choosePreset(this, "btnpreset.",
+                "가상 버튼 프리셋", val -> { loadStage(val); buildButtons(); updatePanel(); }, null)));
+        editBar.addView(barButton("처음대로", v -> {
+            for (String[] d : BUTTONS)
+                stage.put(d[0], defaultCfg(d[0]));
+            buildButtons();
+            updatePanel();
+        }));
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.CENTER_HORIZONTAL | Gravity.TOP);
-        lp.topMargin = dp(12);
-        overlay.addView(editHint, lp);
+        lp.topMargin = dp(6);
+        overlay.addView(editBar, lp);
     }
 
-    private void stopEditing() {
+    private SeekBar slider(int max) {
+        SeekBar s = new SeekBar(this);
+        s.setMax(max);
+        s.setLayoutParams(new LinearLayout.LayoutParams(dp(220), ViewGroup.LayoutParams.WRAP_CONTENT));
+        return s;
+    }
+
+    private TextView label(String text) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextColor(Color.WHITE);
+        t.setTextSize(15);
+        t.setPadding(0, dp(4), dp(8), dp(4));
+        return t;
+    }
+
+    private LinearLayout row(View a, View b) {
+        LinearLayout r = new LinearLayout(this);
+        r.setOrientation(LinearLayout.HORIZONTAL);
+        r.setGravity(Gravity.CENTER_VERTICAL);
+        r.addView(a);
+        r.addView(b);
+        return r;
+    }
+
+    // center panel: settings of the selected button
+    private void addEditPanel() {
+        editPanel = new LinearLayout(this);
+        editPanel.setOrientation(LinearLayout.VERTICAL);
+        editPanel.setPadding(dp(16), dp(10), dp(16), dp(10));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0xDD000000);
+        bg.setStroke(dp(1), 0xFFC03030);
+        bg.setCornerRadius(dp(10));
+        editPanel.setBackground(bg);
+
+        panelTitle = label("");
+        panelTitle.setTextSize(16);
+        editPanel.addView(panelTitle);
+
+        alphaBar = slider(90);
+        editPanel.addView(row(label("투명도"), alphaBar));
+        sizeBar = slider(140);
+        editPanel.addView(row(label("크기   "), sizeBar));
+        hideBox = new CheckBox(this);
+        hideBox.setText("이 버튼 숨기기");
+        hideBox.setTextColor(Color.WHITE);
+        editPanel.addView(hideBox);
+
+        alphaBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar s, int p, boolean user) {
+                if (panelUpdating || selected == null) return;
+                stage.get(selected).alpha = p + 10;
+                updatePanel();
+                previewAlpha(selected);
+            }
+            @Override public void onStartTrackingTouch(SeekBar s) {}
+            @Override public void onStopTrackingTouch(SeekBar s) {
+                // back to the editor look (shown = dark) after previewing
+                buildButtons();
+            }
+        });
+        sizeBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar s, int p, boolean user) {
+                if (panelUpdating || selected == null) return;
+                stage.get(selected).size = p + 60;
+                updatePanel();
+            }
+            @Override public void onStartTrackingTouch(SeekBar s) {}
+            @Override public void onStopTrackingTouch(SeekBar s) { buildButtons(); }
+        });
+        hideBox.setOnCheckedChangeListener((v, checked) -> {
+            if (panelUpdating || selected == null) return;
+            stage.get(selected).hidden = checked;
+            buildButtons();
+        });
+
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER);
+        overlay.addView(editPanel, lp);
+    }
+
+    // while the opacity slider moves, show the selected button as it will look
+    private void previewAlpha(String id) {
+        for (Button b : buttons) {
+            if (id.equals(b.getTag()))
+                b.setAlpha(stage.get(id).alpha / 100f);
+        }
+    }
+
+    private void select(String id) {
+        selected = id;
+        buildButtons();
+        updatePanel();
+    }
+
+    private void updatePanel() {
+        if (editPanel == null)
+            return;
+        panelUpdating = true;
+        boolean has = selected != null;
+        if (!has) {
+            panelTitle.setText("버튼을 눌러 고르세요. 끌어서 옮길 수 있습니다.\n진한 버튼 = 보임, 연한 버튼 = 숨김");
+        } else {
+            BtnCfg c = stage.get(selected);
+            panelTitle.setText("[" + def(selected)[1] + "]  투명도 " + c.alpha + "%  ·  크기 " + c.size + "%");
+            alphaBar.setProgress(c.alpha - 10);
+            sizeBar.setProgress(c.size - 60);
+            hideBox.setChecked(c.hidden);
+        }
+        alphaBar.setEnabled(has);
+        sizeBar.setEnabled(has);
+        // the ⚙ button opens these settings: it can't be hidden
+        hideBox.setEnabled(has && !selected.equals("gear"));
+        hideBox.setText(has && selected.equals("gear") ? "⚙ 버튼은 숨길 수 없습니다" : "이 버튼 숨기기");
+        panelUpdating = false;
+    }
+
+    private String serializeStage() {
+        StringBuilder sb = new StringBuilder();
+        for (String[] d : BUTTONS)
+            sb.append(d[0]).append('=').append(stage.get(d[0]).serialize()).append(';');
+        return sb.toString();
+    }
+
+    private void loadStage(String v) {
+        for (String kv : v.split(";")) {
+            int eq = kv.indexOf('=');
+            if (eq <= 0)
+                continue;
+            String id = kv.substring(0, eq);
+            if (stage.containsKey(id))
+                stage.put(id, BtnCfg.parse(kv.substring(eq + 1), defaultCfg(id)));
+        }
+    }
+
+    private void applyEditing() {
+        SharedPreferences.Editor e = prefs().edit();
+        for (String[] d : BUTTONS)
+            e.putString("btn." + d[0], stage.get(d[0]).serialize());
+        e.apply();
+        endEditing();
+    }
+
+    private void cancelEditing() {
+        endEditing();
+    }
+
+    private void endEditing() {
         editing = false;
-        if (editHint != null)
-            overlay.removeView(editHint);
-        editHint = null;
+        selected = null;
+        if (editBar != null)
+            overlay.removeView(editBar);
+        if (editPanel != null)
+            overlay.removeView(editPanel);
+        editBar = null;
+        editPanel = null;
+        stage.clear();
+        buildButtons();
     }
 
     private void setSkip(boolean on) {
@@ -322,67 +598,20 @@ public class GameActivity extends SDLActivity {
     // ------------------------------------------------------------ settings (⚙)
 
     private void showSettings() {
-        boolean stretch = AppSettings.stretch(this);
-        boolean hasBg = !AppSettings.backgroundPath(this, gameId()).isEmpty();
         String[] items = {
-            "화면 비율: " + (stretch ? "꽉 채우기 → 원래 비율(4:3)로" : "원래 비율(4:3) → 꽉 채우기로"),
-            hasBg ? "배경화면 바꾸기" : "배경화면 고르기",
-            hasBg ? "배경화면 없애기" : "(배경화면 없음)",
-            "가상 버튼 크기",
-            "가상 버튼 투명도",
-            "가상 버튼 위치 바꾸기 (끌어서 옮기기)",
-            "가상 버튼 위치 처음대로",
-            (extrasShown() ? "[결정]·[효과 빨리] 버튼 숨기기" : "[결정]·[효과 빨리] 버튼 보이기"),
-            "게임패드 버튼 설정 (다음 실행부터 적용)",
-            "가상 버튼 모두 숨기기 (뒤로 가기로 다시 표시)",
-            "게임 끝내기",
+            "🖥  화면 설정",
+            "🔘  가상 버튼 (위치·크기·투명도·숨기기)",
+            "🎮  키맵핑 (게임패드)",
+            "⏻  게임 끝내기",
         };
         new AlertDialog.Builder(this)
                 .setTitle("설정")
                 .setItems(items, (d, which) -> {
                     switch (which) {
-                    case 0:
-                        prefs().edit().putBoolean("stretch", !stretch).apply();
-                        applyDisplaySettings();
-                        break;
-                    case 1:
-                        pickBackground();
-                        break;
-                    case 2:
-                        AppSettings.clearBackground(this, gameId());
-                        applyDisplaySettings();
-                        break;
+                    case 0: screenSettings(); break;
+                    case 1: startEditing(); break;
+                    case 2: AppSettings.padSettings(this, this::applyPadSettings); break;
                     case 3:
-                        chooseSize();
-                        break;
-                    case 4:
-                        chooseAlpha();
-                        break;
-                    case 5:
-                        startEditing();
-                        break;
-                    case 6: {
-                        SharedPreferences.Editor e = prefs().edit();
-                        for (String k : prefs().getAll().keySet()) {
-                            if (k.startsWith("btn.pos."))
-                                e.remove(k);
-                        }
-                        e.apply();
-                        placeButtons();
-                        break;
-                    }
-                    case 7:
-                        prefs().edit().putBoolean("btn.extra", !extrasShown()).apply();
-                        buildButtons();
-                        break;
-                    case 8:
-                        AppSettings.padSettings(this, "(다음 실행부터)");
-                        break;
-                    case 9:
-                        hidden = true;
-                        overlay.setVisibility(View.GONE);
-                        break;
-                    case 10:
                         new AlertDialog.Builder(this)
                                 .setMessage("게임을 끝낼까요? 저장하지 않은 진행은 사라집니다.")
                                 .setPositiveButton("끝내기", (d2, w) -> quitGame())
@@ -395,41 +624,34 @@ public class GameActivity extends SDLActivity {
                 .show();
     }
 
-    private void chooseSize() {
-        String[] sizes = { "작게", "보통", "크게", "아주 크게" };
+    private void screenSettings() {
+        boolean stretch = AppSettings.stretch(this);
+        boolean hasBg = !AppSettings.backgroundPath(this, gameId()).isEmpty();
+        String[] items = {
+            "화면 비율:  " + (stretch ? "꽉 채우기  (누르면 → 원래 비율 4:3)" : "원래 비율 4:3  (누르면 → 꽉 채우기)"),
+            hasBg ? "배경화면 바꾸기" : "배경화면 고르기",
+            hasBg ? "배경화면 없애기" : "배경화면 없애기  (지금 없음)",
+        };
         new AlertDialog.Builder(this)
-                .setTitle("가상 버튼 크기")
-                .setSingleChoiceItems(sizes, prefs().getInt("btn.size", 1), (d, which) -> {
-                    prefs().edit().putInt("btn.size", which).apply();
-                    buildButtons();
-                    d.dismiss();
+                .setTitle("화면 설정")
+                .setItems(items, (d, which) -> {
+                    switch (which) {
+                    case 0:
+                        prefs().edit().putBoolean("stretch", !stretch).apply();
+                        applyDisplaySettings();
+                        screenSettings();
+                        break;
+                    case 1:
+                        pickBackground();
+                        break;
+                    case 2:
+                        AppSettings.clearBackground(this, gameId());
+                        applyDisplaySettings();
+                        screenSettings();
+                        break;
+                    }
                 })
-                .show();
-    }
-
-    private void chooseAlpha() {
-        SeekBar bar = new SeekBar(this);
-        bar.setMax(90);
-        bar.setProgress(prefs().getInt("btn.alpha", 70) - 10);
-        bar.setPadding(dp(24), dp(24), dp(24), dp(24));
-        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar s, int p, boolean user) {
-                prefs().edit().putInt("btn.alpha", p + 10).apply();
-                for (Button b : buttons)
-                    b.setAlpha((p + 10) / 100f);
-            }
-
-            @Override
-            public void onStartTrackingTouch(SeekBar s) {}
-
-            @Override
-            public void onStopTrackingTouch(SeekBar s) {}
-        });
-        new AlertDialog.Builder(this)
-                .setTitle("가상 버튼 투명도 (왼쪽 = 투명)")
-                .setView(bar)
-                .setPositiveButton("확인", null)
+                .setNegativeButton("닫기", null)
                 .show();
     }
 
@@ -465,12 +687,7 @@ public class GameActivity extends SDLActivity {
     @Override
     public void onBackPressed() {
         if (editing) {
-            stopEditing();
-            return;
-        }
-        if (hidden) {
-            hidden = false;
-            overlay.setVisibility(View.VISIBLE);
+            cancelEditing();
             return;
         }
         // back = right click (menu / cancel) in the game

@@ -404,6 +404,31 @@ static int cfg_handler(void *user, const char *section, const char *name, const 
 	return 1;
 }
 
+/*
+ * Controller settings from the environment (Android launcher):
+ * AI5_CONTROLLER="A=ENTER;B=ESCAPE;LEFTANALOG=CURSOR" (as INI [CONTROLLER]).
+ * Called at startup and from the event loop, so that a change made in the
+ * launcher's settings applies at once.
+ */
+void controller_env_apply(void)
+{
+	static char *last = NULL;
+	const char *ctl = getenv("AI5_CONTROLLER");
+	if (!ctl || !*ctl || (last && !strcmp(last, ctl)))
+		return;
+	free(last);
+	last = xstrdup(ctl);
+	char *buf = xstrdup(ctl);
+	for (char *tok = strtok(buf, ";"); tok; tok = strtok(NULL, ";")) {
+		char *eq = strchr(tok, '=');
+		if (!eq)
+			continue;
+		*eq = '\0';
+		cfg_handler(&config, "CONTROLLER", tok, eq + 1);
+	}
+	free(buf);
+}
+
 static void usage(void)
 {
 	printf("Usage: ai5 [options] [inifile-or-directory]\n");
@@ -827,20 +852,8 @@ int main(int argc, char *argv[])
 		free(our_ini_name);
 	}
 
-	// controller settings from the environment (Android launcher):
-	// AI5_CONTROLLER="A=ENTER;B=ESCAPE;LEFTANALOG=CURSOR" (as INI [CONTROLLER])
-	const char *ctl = getenv("AI5_CONTROLLER");
-	if (ctl && *ctl) {
-		char *buf = xstrdup(ctl);
-		for (char *tok = strtok(buf, ";"); tok; tok = strtok(NULL, ";")) {
-			char *eq = strchr(tok, '=');
-			if (!eq)
-				continue;
-			*eq = '\0';
-			cfg_handler(&config, "CONTROLLER", tok, eq + 1);
-		}
-		free(buf);
-	}
+	// controller settings from the environment (Android launcher)
+	controller_env_apply();
 
 	// Korean translation: message archive with .KOR extension
 	if (config.file.mes.arc && config.file.mes.name) {

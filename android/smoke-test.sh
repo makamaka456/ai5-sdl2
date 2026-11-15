@@ -26,7 +26,13 @@ adb shell mkdir -p /sdcard/ai5test
 adb shell am start -n $PKG/.GameActivity --es path /sdcard/ai5test
 sleep 10
 shot game
+# the virtual button editor (opened by a debug extra)
+adb shell am force-stop $PKG
+adb shell am start -n $PKG/.GameActivity --es path /sdcard/ai5test --ez debug_edit true
+sleep 10
+shot editor
 adb logcat -d | grep -E " (SDL|ai5|libc|DEBUG|AndroidRuntime) *:" | grep -v NetworkSecurity | tail -60
 print_shot launcher
 print_shot game
+print_shot editor
 exit 0
