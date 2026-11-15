@@ -576,8 +576,21 @@ void restart(void)
 	execv(saved_argv[0], saved_argv);
 }
 
+#ifdef __ANDROID__
+#include <android/log.h>
+// show fatal errors instead of silently closing the app
+static void android_error_handler(const char *msg)
+{
+	__android_log_print(ANDROID_LOG_ERROR, "ai5", "%s", msg);
+	SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "AI5 오류", msg, NULL);
+}
+#endif
+
 int main(int argc, char *argv[])
 {
+#ifdef __ANDROID__
+	sys_error_handler = android_error_handler;
+#endif
 	saved_argc = argc;
 	saved_argv = argv;
 	if (!getcwd(saved_cwd, PATH_MAX)) {
