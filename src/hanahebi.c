@@ -153,6 +153,9 @@ static void msgwin_show(void);
 static void msgwin_hide(void);
 static void util_save_screen(unsigned mode);
 static void util_system_menu(void);
+static void msgwin_compose(void);
+static bool msgwin_visible;
+static int msgwin_icon_state;
 static void apply_volume(enum audio_channel ch, const char *section);
 static void util_scroll(struct param_list *params);
 static void util_room(struct param_list *params);
@@ -1060,6 +1063,15 @@ static void hanahebi_util(struct param_list *params)
 	case 22000:
 		util_ending_mode(param_or(params, 1, 0));
 		break;
+	case 504: // [x] icon state (0 normal, 1 highlighted, 2 pressed)
+		msgwin_icon_state = min(param_or(params, 1, 0), 2u);
+		if (msgwin_visible)
+			msgwin_compose();
+		break;
+	case 9000: // clickable words in the text (dictionary): none
+		if (param_or(params, 1, 0) == 1)
+			mem_set_var16(10, 0xffff);
+		break;
 	case 502: msgwin_show(); break;
 	case 503: msgwin_hide(); break;
 	default:
@@ -1205,19 +1217,57 @@ static void hanahebi_set_colors(struct param_list *params)
 static bool msgwin_visible = false;
 
 // draw the message window into overlay 0 (shown on top of the screen)
+/*
+ * The [x] icon at the bottom right of the message window (Util 504):
+ * clicking it hides the window. Icons are 20x20 in mes.gcc at (0/20/40, 272)
+ * for the normal, highlighted and pressed states.
+ */
+static int msgwin_icon_state = 0;
+static SDL_Surface *msgwin_icons = NULL;
+
+static void msgwin_draw_icon(SDL_Surface *ov)
+{
+	if (!msgwin_icons) {
+		struct cg *cg = hh_cg_load("mes.gcc");
+		if (!cg || cg->palette || cg->metrics.bpp == 8 || cg->metrics.h < 292) {
+			if (cg)
+				cg_free(cg);
+			return;
+		}
+		SDL_Surface *tmp = SDL_CreateRGBSurfaceWithFormatFrom(cg->pixels, cg->metrics.w,
+				cg->metrics.h, 32, cg->metrics.w * 4, SDL_PIXELFORMAT_RGBA32);
+		msgwin_icons = SDL_CreateRGBSurfaceWithFormat(0, 60, 20, 32, SDL_PIXELFORMAT_RGBA32);
+		SDL_SetSurfaceBlendMode(tmp, SDL_BLENDMODE_NONE);
+		SDL_Rect src = { 0, 272, 60, 20 };
+		SDL_BlitSurface(tmp, &src, msgwin_icons, NULL);
+		SDL_FreeSurface(tmp);
+		cg_free(cg);
+		SDL_SetSurfaceBlendMode(msgwin_icons, SDL_BLENDMODE_BLEND);
+	}
+	SDL_Rect src = { msgwin_icon_state * 20, 0, 20, 20 };
+	SDL_Rect dst = { 615, 447, 20, 20 };
+	SDL_BlitSurface(msgwin_icons, &src, ov, &dst);
+}
+
 static void msgwin_compose(void)
 {
+	// window color from AI5WIN.INI [Mes] nRed/nGreen/nBlue/nAlpha
 	const char *a = config_ini_get("Mes", "nAlpha");
+	const char *cr = config_ini_get("Mes", "nRed");
+	const char *cg = config_ini_get("Mes", "nGreen");
+	const char *cb = config_ini_get("Mes", "nBlue");
 	unsigned alpha = a ? atoi(a) : 128;
 	SDL_Surface *ov = gfx_get_overlay(0);
 	SDL_CALL(SDL_FillRect, ov, NULL, SDL_MapRGBA(ov->format, 0, 0, 0, 0));
 	SDL_Rect r = { 0, MSGWIN_Y, 640, MSGWIN_H };
-	SDL_CALL(SDL_FillRect, ov, &r, SDL_MapRGBA(ov->format, 0, 0, 0, alpha));
+	SDL_CALL(SDL_FillRect, ov, &r, SDL_MapRGBA(ov->format, cr ? atoi(cr) : 0,
+			cg ? atoi(cg) : 0, cb ? atoi(cb) : 0, alpha));
 	SDL_Surface *text = gfx_get_surface(MSGWIN_SURFACE);
 	SDL_Rect src = { 0, 0, 640, MSGWIN_H };
 	SDL_CALL(SDL_SetColorKey, text, SDL_TRUE, SDL_MapRGB(text->format, 0, 0, 0));
 	SDL_CALL(SDL_BlitSurface, text, &src, ov, &r);
 	SDL_CALL(SDL_SetColorKey, text, SDL_FALSE, 0);
+	msgwin_draw_icon(ov);
 	gfx_overlay_enable(0);
 	gfx_screen_dirty();
 }
