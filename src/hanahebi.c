@@ -152,6 +152,7 @@ static void msgwin_show(void);
 static void msgwin_hide(void);
 static void util_save_screen(unsigned mode);
 static void util_system_menu(void);
+static void util_music_mode(unsigned current);
 static void util_title_menu(unsigned menu);
 static void util_backlog_view(void);
 static void bl_add_text(const char *text);
@@ -846,6 +847,9 @@ static void hanahebi_util(struct param_list *params)
 		break;
 	case 11000:
 		util_title_menu(param_or(params, 1, 0));
+		break;
+	case 24000:
+		util_music_mode(param_or(params, 2, 0xff));
 		break;
 	case 502: msgwin_show(); break;
 	case 503: msgwin_hide(); break;
@@ -2404,6 +2408,24 @@ static void util_title_menu(unsigned menu)
 	gfx_overlay_disable(2);
 	gfx_screen_dirty();
 	mem_set_var16(18, result);
+}
+
+/*
+ * Util 24000: music mode (our own list). (24000, first, current) ->
+ * var16[18] = track 1..24, 30 stop, 0 back.
+ */
+static void util_music_mode(unsigned current)
+{
+	char labels[26][32];
+	const char *items[26];
+	for (unsigned i = 0; i < 24; i++) {
+		snprintf(labels[i], sizeof(labels[i]), "%s 곡 %02u", i == current ? "▶" : "♪", i + 1);
+		items[i] = labels[i];
+	}
+	items[24] = "정지";
+	items[25] = "돌아가기";
+	int r = choice_run(items, 26);
+	mem_set_var16(18, r < 0 || r == 25 ? 0 : r == 24 ? 30 : r + 1);
 }
 
 static void util_save_screen(unsigned mode)
