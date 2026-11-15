@@ -829,6 +829,26 @@ static void hanahebi_util(struct param_list *params)
 		mem_set_var16(5, speed[i < 4 ? i : 1]);
 		break;
 	}
+	case 2001: { // transition to the back buffer: (2001, 0 = from screen / 1 = from black, n)
+		unsigned n = param_or(params, 2, 30);
+		if (param_or(params, 1, 0) == 1)
+			gfx_fill(0, 0, 640, 480, 0, 0);
+		unsigned ms = max(n * 20, 1u);
+		gfx_copy(0, 0, 640, 480, 0, 0, 0, FADE_SURFACE);
+		uint32_t start = SDL_GetTicks();
+		vm_timer_t timer = vm_timer_create();
+		while (!input_down(INPUT_CTRL)) {
+			uint32_t t = SDL_GetTicks() - start;
+			if (t >= ms)
+				break;
+			gfx_copy(0, 0, 640, 480, FADE_SURFACE, 0, 0, 0);
+			gfx_blend(0, 0, 640, 480, BACK_SURFACE, 0, 0, 0, t * 255 / ms);
+			vm_peek();
+			vm_timer_tick(&timer, 16);
+		}
+		gfx_copy(0, 0, 640, 480, BACK_SURFACE, 0, 0, 0);
+		break;
+	}
 	case 0: // screen offset (0, x, y): used for shaking
 		gfx_display_offset_x = (int32_t)param_or(params, 1, 0);
 		gfx_display_offset_y = (int32_t)param_or(params, 2, 0);
