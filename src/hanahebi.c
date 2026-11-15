@@ -831,6 +831,15 @@ static const struct { unsigned id; const char *name; } map_rooms[] = {
 	{ 18, "조교실" },
 	{ 21, "???" },
 };
+// basement (FASUNDERMAP.MES: 19 -> FASmap18, 20 -> FASmap19, 21 upstairs)
+static const struct { unsigned id; const char *name; } map_rooms_b[] = {
+	{ 19, "스테타로의 방" },
+	{ 20, "지하 조교실" },
+	{ 22, "지하 감옥" },
+	{ 21, "1층으로" },
+};
+
+
 
 /*
  * Pre-rendered map views: 1024-byte BGRx palette + 640x480 8-bit pixels.
@@ -1101,9 +1110,19 @@ static const struct map_door *map_door_ahead(void)
 
 static const char *map_room_name(int room)
 {
+	if (map.floor) {
+		for (unsigned i = 0; i < ARRAY_SIZE(map_rooms_b); i++) {
+			if ((int)map_rooms_b[i].id == room)
+				return map_rooms_b[i].name;
+		}
+	}
 	for (unsigned i = 0; i < ARRAY_SIZE(map_rooms); i++) {
 		if ((int)map_rooms[i].id == room)
 			return map_rooms[i].name;
+	}
+	for (unsigned i = 0; i < ARRAY_SIZE(map_rooms_b); i++) {
+		if ((int)map_rooms_b[i].id == room)
+			return map_rooms_b[i].name;
 	}
 	return NULL;
 }
@@ -1448,13 +1467,29 @@ static int map_walk_hit(unsigned x, unsigned y)
 }
 
 // the room list (stands in for clicking a room on the floor plan)
+static unsigned map_room_count(void)
+{
+	return map.floor ? ARRAY_SIZE(map_rooms_b) : ARRAY_SIZE(map_rooms);
+}
+
+static unsigned map_room_id(unsigned i)
+{
+	return map.floor ? map_rooms_b[i].id : map_rooms[i].id;
+}
+
+static const char *map_room_label(unsigned i)
+{
+	return map.floor ? map_rooms_b[i].name : map_rooms[i].name;
+}
+
 static int map_room_list(void)
 {
 	const char *items[ARRAY_SIZE(map_rooms)];
-	for (unsigned i = 0; i < ARRAY_SIZE(map_rooms); i++)
-		items[i] = map_rooms[i].name;
-	int r = choice_run(items, ARRAY_SIZE(map_rooms));
-	return r < 0 ? -1 : (int)map_rooms[r].id;
+	unsigned n = map_room_count();
+	for (unsigned i = 0; i < n; i++)
+		items[i] = map_room_label(i);
+	int r = choice_run(items, n);
+	return r < 0 ? -1 : (int)map_room_id(r);
 }
 
 static void util_map_select(void)
@@ -1479,8 +1514,8 @@ static void util_map_select(void)
 		map_load_graph(map.floor);
 		map_show(map.dir * 2);
 		gfx_screen_dirty();
-		int r = rand() % (ARRAY_SIZE(map_rooms) + 2);
-		int room = r < (int)ARRAY_SIZE(map_rooms) ? (int)map_rooms[r].id
+		int r = rand() % (map_room_count() + 2);
+		int room = r < (int)map_room_count() ? (int)map_room_id(r)
 			: map_nr_people ? (int)map_people[rand() % map_nr_people].id : 1;
 		NOTICE("map: random choice %d", room);
 		mem_set_var32(12, room);
