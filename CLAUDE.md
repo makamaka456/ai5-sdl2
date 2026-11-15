@@ -108,3 +108,12 @@ SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./build/ai5 <게임폴더>
 - System 함수 표: 0 글꼴, 2 커서, 5 BGM, 6 효과음, 7 음성, 8 파일/라이브러리, 9 그림, 10 화면 갱신(미구현), 11 그림 연산, 12 대기, 13 색, 18 입력, 19 백로그, 24 화면 기록 목록, 26 ?, 27 INI, 29 시간
 - Util: 23 전환 속도, 50/51 인물, 502/503 대사창 보이기/숨기기, 그 외 대부분 미구현(로그만)
 - Util 분기 함수: HH2D.exe `FUN_00421bd0` (Ghidra 결과에서 `case 0x3e8` 등으로 찾기)
+
+## 안드로이드 (7단계, 2026-11-15 시작)
+- 폴더 `android/`: Gradle 프로젝트(AGP 8.7, compileSdk 35, minSdk 21, arm64-v8a/armeabi-v7a)
+  - `fetch-deps.sh`: SDL2 2.30.9, SDL2_ttf 2.22.0, SDL2_mixer 2.8.0, libpng 1.6.44를 `app/jni/deps/`에 받음 (커밋 안 함)
+  - `app/jni/CMakeLists.txt`: 위 라이브러리 + libai5 + 엔진(`libmain.so`, 소리는 SDL_mixer 경로 `USE_SDL_MIXER`)
+  - 리눅스에서 시험: `cmake android/app/jni && make main` (PC에서 CMake 설정 오류를 먼저 잡을 수 있음)
+  - 자바: `LauncherActivity`(게임 폴더 목록, 폴더 추가→자동 감지, 길게 눌러 한글판 설정), `GameActivity`(SDLActivity, 화면 버튼 메뉴/넘기기/⋮, 뒤로 가기=오른쪽 클릭, 별도 프로세스 `:game`)
+  - 게임 파일은 복사하지 않고 "모든 파일 접근" 권한으로 폴더를 직접 읽음. 글꼴은 assets → 앱 폴더로 복사 후 `AI5_DATA_DIR` 환경 변수로 엔진에 알림
+- APK는 GitHub Actions `Android` 워크플로(`.github/workflows/android.yaml`) 산출물 `ai5-launcher-apk` (작업 공간에서는 dl.google.com이 막혀 직접 빌드 불가)
