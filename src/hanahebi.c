@@ -2440,6 +2440,63 @@ static void hanahebi_util(struct param_list *params)
 	case 15000:
 		util_replay_menu();
 		break;
+	case 82: { // (82, who, stage): "stage done" notice from mes_rank.gcc on surface 4 (HH2D.exe 0x421230)
+		unsigned who = param_or(params, 1, 0), stage = param_or(params, 2, 0);
+		SDL_Surface *ov = gfx_get_overlay(2);
+		SDL_CALL(SDL_FillRect, ov, NULL, SDL_MapRGBA(ov->format, 0, 0, 0, 0));
+		SDL_Surface *src = gfx_get_surface(4);
+		SDL_BlendMode bm;
+		SDL_GetSurfaceBlendMode(src, &bm);
+		SDL_SetSurfaceBlendMode(src, SDL_BLENDMODE_NONE);
+		const int ox = 24, oy = 180;
+		#define PIECE(dx, dy, w, h, sx, sy) do { SDL_Rect r_ = { sx, sy, w, h }, d_ = { ox + (dx), oy + (dy), w, h }; \
+			SDL_BlitSurface(src, &r_, ov, &d_); } while (0)
+		PIECE(0, 0, 0x250, 0x54, 0, 0);
+		if (who <= 3) {
+			static const int name_x[4] = { 0, 0x50, 0xa0, 0xf0 };
+			PIECE(0x60, 0x1c, 0x50, 0x1c, name_x[who], 0x70);
+			PIECE(0xb0, 0x1c, 0x128, 0x1c, 0, 0x54);
+			PIECE(0x100, 0x1c, 0x18, 0x1c, 0x128 + stage * 0x18, 0x54);
+		} else if (who <= 5) {
+			PIECE(0x20, 0x1c, 0x210, 0x1c, 0, who == 4 ? 0x8c : 0xa8);
+		}
+		#undef PIECE
+		SDL_SetSurfaceBlendMode(src, bm);
+		gfx_overlay_enable(2);
+		gfx_screen_dirty();
+		uint32_t t0 = SDL_GetTicks();
+		while (SDL_GetTicks() - t0 < 2000 && !input_down(INPUT_SHIFT) && !input_down(INPUT_ACTIVATE)) {
+			vm_peek();
+			vm_delay(16);
+		}
+		input_wait_until_up(INPUT_ACTIVATE);
+		gfx_overlay_disable(2);
+		gfx_screen_dirty();
+		break;
+	}
+	case 83: { // show surface 4 (0,0,592,144) at (24,152) until a click (HH2D.exe 0x4215c0)
+		SDL_Surface *ov = gfx_get_overlay(2);
+		SDL_CALL(SDL_FillRect, ov, NULL, SDL_MapRGBA(ov->format, 0, 0, 0, 0));
+		SDL_Surface *src = gfx_get_surface(4);
+		SDL_Rect r = { 0, 0, 592, 144 }, d = { 24, 152, 592, 144 };
+		SDL_BlendMode bm;
+		SDL_GetSurfaceBlendMode(src, &bm);
+		SDL_SetSurfaceBlendMode(src, SDL_BLENDMODE_NONE);
+		SDL_CALL(SDL_BlitSurface, src, &r, ov, &d);
+		SDL_SetSurfaceBlendMode(src, bm);
+		gfx_overlay_enable(2);
+		gfx_screen_dirty();
+		input_wait_until_up(INPUT_ACTIVATE);
+		while (!input_down(INPUT_ACTIVATE) && !input_down(INPUT_CANCEL) && !input_down(INPUT_SHIFT)) {
+			vm_peek();
+			vm_delay(16);
+		}
+		input_wait_until_up(INPUT_ACTIVATE);
+		input_wait_until_up(INPUT_CANCEL);
+		gfx_overlay_disable(2);
+		gfx_screen_dirty();
+		break;
+	}
 	case 16000:
 		mem_set_var16(18, confirm("회상을 끝낼까요?") ? 1 : 0);
 		break;
@@ -2486,6 +2543,23 @@ static void hanahebi_util(struct param_list *params)
 		util_backlog_view();
 		break;
 	case 11000:
+		// debugging: HH_DEBUG_CALL="image.gcc:util,a,b" loads the image to
+		// surface 4 and runs that Util once from the title
+		if (getenv("HH_DEBUG_CALL")) {
+			static bool called = false;
+			char img[64];
+			unsigned u, a = 0, b = 0;
+			if (!called && sscanf(getenv("HH_DEBUG_CALL"), "%63[^:]:%u,%u,%u", img, &u, &a, &b) >= 2) {
+				called = true;
+				_sys_load_image(img, 4, 1);
+				struct param_list pl = { .nr_params = 3 };
+				pl.params[0].type = pl.params[1].type = pl.params[2].type = MES_PARAM_EXPRESSION;
+				pl.params[0].val = u;
+				pl.params[1].val = a;
+				pl.params[2].val = b;
+				hanahebi_util(&pl);
+			}
+		}
 		if (getenv("HH_DEBUG_ITEM")) {
 			static bool shown = false;
 			unsigned t, g;
