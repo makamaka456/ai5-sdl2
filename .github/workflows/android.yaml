@@ -75,13 +75,13 @@ jobs:
         script: android/smoke-test.sh
 
     - name: Name the APK
-      run: cp android/app/build/outputs/apk/release/*.apk android/app/build/outputs/apk/release/ai5-launcher.apk
+      run: mv android/app/build/outputs/apk/release/app-release.apk android/app/build/outputs/apk/release/ai5-launcher.apk
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
         name: ai5-launcher-apk
-        path: android/app/build/outputs/apk/release/*.apk
+        path: android/app/build/outputs/apk/release/ai5-launcher.apk
 
     # a fixed download address: the "android-latest" release always has the newest APK
     - name: Publish to the android-latest release
