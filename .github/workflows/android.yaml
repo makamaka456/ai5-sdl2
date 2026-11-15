@@ -12,6 +12,9 @@ on:
   workflow_dispatch:
 
 # only build the newest commit of a branch
+permissions:
+  contents: write
+
 concurrency:
   group: android-${{ github.ref }}
   cancel-in-progress: true
@@ -62,8 +65,25 @@ jobs:
         disable-animations: true
         script: android/smoke-test.sh
 
+    - name: Name the APK
+      run: cp android/app/build/outputs/apk/release/*.apk android/app/build/outputs/apk/release/ai5-launcher.apk
+
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
         name: ai5-launcher-apk
         path: android/app/build/outputs/apk/release/*.apk
+
+    # a fixed download address: the "android-latest" release always has the newest APK
+    - name: Publish to the android-latest release
+      if: github.event_name == 'push'
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: android-latest
+        name: AI5 런처 (최신 안드로이드 빌드)
+        prerelease: true
+        make_latest: false
+        body: |
+          가장 최근에 빌드된 AI5 런처 APK입니다. 아래 Assets에서 `ai5-launcher.apk`를 받아 설치하세요.
+          커밋: ${{ github.sha }}
+        files: android/app/build/outputs/apk/release/ai5-launcher.apk

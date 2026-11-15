@@ -130,6 +130,8 @@ SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./build/ai5 <게임폴더>
 - 런처(2026-11-15 개편): 지원 게임 목록 + 게임별 폴더, 각 줄 [배경화면] 버튼(그림 → 앱 폴더 `bg_<게임>.png`), 화면 꽉 채우기, 게임패드 설정. 공용 설정은 `AppSettings.java`(SharedPreferences "launcher", 두 프로세스가 같이 씀)
 - 게임 화면: 가상 버튼(오른쪽 메뉴·넘기기·⚙, 왼쪽 숨기기·지난 대사, 선택: 결정·효과 빨리), ⚙ = 화면 비율·배경화면·버튼 크기/투명도/위치(끌어서)·게임패드·버튼 숨기기·끝내기
 - 엔진 환경 변수: `AI5_STRETCH`(1=꽉 채우기), `AI5_BACKGROUND`(PNG 경로, 화면 전체 배경), 둘 다 매 프레임 확인해서 게임 중 바로 바뀜. `AI5_CONTROLLER`는 시작할 때만 읽음
+- 서명: 고정 키 `android/ai5-launcher.keystore`(비밀번호 ai5launcher, 일부러 공개. 덮어 설치가 되게 하려는 것). 키를 바꾸면 사용자가 앱을 지우고 다시 설치해야 함
+- 고정 다운로드 주소: 브랜치에 푸시하면 Releases의 `android-latest`(사전 출시)에 `ai5-launcher.apk`가 올라감 → https://github.com/makamaka456/ai5-sdl2/releases/tag/android-latest
 - APK는 GitHub Actions `Android` 워크플로(`.github/workflows/android.yaml`) 산출물 `ai5-launcher-apk` (작업 공간에서는 dl.google.com이 막혀 직접 빌드 불가)
 
 ## 꽃과뱀 키 분석 (2026-11-15)
