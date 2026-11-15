@@ -75,6 +75,8 @@ bool gfx_confirm_quit(void)
 
 struct gfx gfx = {0};
 struct gfx_view gfx_view = { 640, 400 };
+static bool gfx_stretch = false;
+static void gfx_update_stretch(void);
 
 void gfx_dirty(unsigned surface, int x, int y, int w, int h)
 {
@@ -366,9 +368,30 @@ void gfx_init(const char *name)
 	gfx.window_id = SDL_GetWindowID(gfx.window);
 	SDL_CTOR(SDL_CreateRenderer, gfx.renderer, gfx.window, -1, 0);
 	SDL_CALL(SDL_SetRenderDrawColor, gfx.renderer, 0, 0, 0, SDL_ALPHA_OPAQUE);
-	SDL_CALL(SDL_RenderSetLogicalSize, gfx.renderer, gfx_view.w, gfx_view.h);
+	// AI5_STRETCH=1 (Android option): fill the whole screen, ignoring the
+	// aspect ratio. Otherwise the picture keeps its aspect ratio.
+	const char *stretch = getenv("AI5_STRETCH");
+	gfx_stretch = stretch && atoi(stretch) != 0;
+	if (!gfx_stretch)
+		SDL_CALL(SDL_RenderSetLogicalSize, gfx.renderer, gfx_view.w, gfx_view.h);
+	gfx_update_stretch();
 	gfx_init_window();
 	atexit(gfx_fini);
+}
+
+// scale the picture to the output size (stretch mode)
+static void gfx_update_stretch(void)
+{
+	if (!gfx_stretch)
+		return;
+	int w, h;
+	if (SDL_GetRendererOutputSize(gfx.renderer, &w, &h) || w <= 0 || h <= 0)
+		return;
+	float sx = (float)w / gfx_view.w, sy = (float)h / gfx_view.h;
+	float cx, cy;
+	SDL_RenderGetScale(gfx.renderer, &cx, &cy);
+	if (cx != sx || cy != sy)
+		SDL_RenderSetScale(gfx.renderer, sx, sy);
 }
 
 void gfx_update(void)
@@ -398,6 +421,7 @@ void gfx_update(void)
 			+ dst_r.x * gfx.display->format->BytesPerPixel;
 		SDL_CALL(SDL_UpdateTexture, gfx.texture, &dst_r, p, gfx.display->pitch);
 	}
+	gfx_update_stretch();
 	SDL_CALL(SDL_RenderClear, gfx.renderer);
 	if (gfx_display_offset_x || gfx_display_offset_y) {
 		// screen shake
