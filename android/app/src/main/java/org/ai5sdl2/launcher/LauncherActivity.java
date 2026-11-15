@@ -149,6 +149,11 @@ public class LauncherActivity extends Activity {
                 prefs().edit().putBoolean("stretch", on).apply());
         row.addView(stretch);
         root.addView(row);
+        Button pad = new Button(this);
+        pad.setText("게임패드 버튼 설정");
+        pad.setOnClickListener(v -> padSettings());
+        root.addView(pad, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
 
         ListView list = new ListView(this);
         adapter = new ArrayAdapter<String>(this, android.R.layout.simple_list_item_2,
@@ -397,6 +402,125 @@ public class LauncherActivity extends Activity {
         i.putExtra(GameActivity.EXTRA_PATH, folder);
         i.putExtra(GameActivity.EXTRA_ARGS, new String[] { "--game=" + GAMES[game][0] });
         i.putExtra(GameActivity.EXTRA_STRETCH, prefs().getBoolean("stretch", true));
+        i.putExtra(GameActivity.EXTRA_CONTROLLER, controllerConfig());
         startActivity(i);
+    }
+
+    // ---------------------------------------------------------------- gamepad
+
+    // controller buttons (engine INI [CONTROLLER] names) and their labels
+    static final String[][] PAD_BUTTONS = {
+        { "A", "A" }, { "B", "B" }, { "X", "X" }, { "Y", "Y" },
+        { "LEFTSHOULDER", "L1" }, { "RIGHTSHOULDER", "R1" },
+        { "LEFTTRIGGER", "L2" }, { "RIGHTTRIGGER", "R2" },
+        { "BACK", "SELECT" }, { "START", "START" },
+        { "LEFTSTICK", "L3 (왼쪽 스틱 누르기)" }, { "RIGHTSTICK", "R3 (오른쪽 스틱 누르기)" },
+        { "UP", "방향키 위" }, { "DOWN", "방향키 아래" }, { "LEFT", "방향키 왼쪽" }, { "RIGHT", "방향키 오른쪽" },
+    };
+    // defaults for these games (A decide, B menu, X skip, Y hide window, L1 backlog)
+    static final String[] PAD_DEFAULTS = {
+        "ENTER", "ESCAPE", "CTRL", "SPACE", "BACKSPACE", "SHIFT", "PAGEUP", "PAGEDOWN",
+        "NONE", "ESCAPE", "NONE", "NONE", "UP", "DOWN", "LEFT", "RIGHT",
+    };
+    static final String[][] PAD_ACTIONS = {
+        { "ENTER", "결정 / 클릭 (Enter)" }, { "ESCAPE", "메뉴 / 취소 (오른쪽 클릭)" },
+        { "CTRL", "넘기기 (누르는 동안 Ctrl)" }, { "SPACE", "대사창 숨기기 (Space)" },
+        { "BACKSPACE", "지난 대사 (Backspace)" }, { "SHIFT", "화면 효과 빨리 (Shift)" },
+        { "UP", "위" }, { "DOWN", "아래" }, { "LEFT", "왼쪽" }, { "RIGHT", "오른쪽" },
+        { "PAGEUP", "Page Up" }, { "PAGEDOWN", "Page Down" }, { "NONE", "없음" },
+    };
+    static final String[][] STICK_MODES = {
+        { "CURSOR", "마우스 커서 움직이기" }, { "DPAD", "방향키로 쓰기" }, { "DISABLED", "쓰지 않기" },
+    };
+
+    private String padValue(int i) {
+        return prefs().getString("pad." + PAD_BUTTONS[i][0], PAD_DEFAULTS[i]);
+    }
+
+    private static String label(String[][] table, String value) {
+        for (String[] e : table) {
+            if (e[0].equals(value))
+                return e[1];
+        }
+        return value;
+    }
+
+    // value for the engine: "A=ENTER;B=ESCAPE;...;LEFTANALOG=CURSOR"
+    private String controllerConfig() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < PAD_BUTTONS.length; i++)
+            sb.append(PAD_BUTTONS[i][0]).append('=').append(padValue(i)).append(';');
+        sb.append("LEFTANALOG=").append(prefs().getString("pad.LEFTANALOG", "CURSOR")).append(';');
+        sb.append("RIGHTANALOG=").append(prefs().getString("pad.RIGHTANALOG", "DPAD")).append(';');
+        sb.append("CURSORSPEED=").append(prefs().getString("pad.CURSORSPEED", "16"));
+        return sb.toString();
+    }
+
+    private void padSettings() {
+        int n = PAD_BUTTONS.length;
+        String[] items = new String[n + 4];
+        for (int i = 0; i < n; i++)
+            items[i] = PAD_BUTTONS[i][1] + "  →  " + label(PAD_ACTIONS, padValue(i));
+        items[n] = "왼쪽 스틱  →  " + label(STICK_MODES, prefs().getString("pad.LEFTANALOG", "CURSOR"));
+        items[n + 1] = "오른쪽 스틱  →  " + label(STICK_MODES, prefs().getString("pad.RIGHTANALOG", "DPAD"));
+        items[n + 2] = "커서 속도  →  " + prefs().getString("pad.CURSORSPEED", "16");
+        items[n + 3] = "기본값으로 되돌리기";
+        new AlertDialog.Builder(this)
+                .setTitle("게임패드 버튼 설정")
+                .setItems(items, (d, which) -> {
+                    if (which < n) {
+                        chooseAction(which);
+                    } else if (which == n || which == n + 1) {
+                        chooseStick(which == n ? "pad.LEFTANALOG" : "pad.RIGHTANALOG");
+                    } else if (which == n + 2) {
+                        chooseSpeed();
+                    } else {
+                        SharedPreferences.Editor e = prefs().edit();
+                        for (String k : prefs().getAll().keySet()) {
+                            if (k.startsWith("pad."))
+                                e.remove(k);
+                        }
+                        e.apply();
+                        padSettings();
+                    }
+                })
+                .setNegativeButton("닫기", null)
+                .show();
+    }
+
+    private void chooseAction(int button) {
+        String[] labels = new String[PAD_ACTIONS.length];
+        for (int i = 0; i < labels.length; i++)
+            labels[i] = PAD_ACTIONS[i][1];
+        new AlertDialog.Builder(this)
+                .setTitle(PAD_BUTTONS[button][1] + " 버튼")
+                .setItems(labels, (d, which) -> {
+                    prefs().edit().putString("pad." + PAD_BUTTONS[button][0], PAD_ACTIONS[which][0]).apply();
+                    padSettings();
+                })
+                .show();
+    }
+
+    private void chooseStick(String key) {
+        String[] labels = new String[STICK_MODES.length];
+        for (int i = 0; i < labels.length; i++)
+            labels[i] = STICK_MODES[i][1];
+        new AlertDialog.Builder(this)
+                .setItems(labels, (d, which) -> {
+                    prefs().edit().putString(key, STICK_MODES[which][0]).apply();
+                    padSettings();
+                })
+                .show();
+    }
+
+    private void chooseSpeed() {
+        String[] speeds = { "8", "12", "16", "24", "32" };
+        new AlertDialog.Builder(this)
+                .setTitle("커서 속도")
+                .setItems(speeds, (d, which) -> {
+                    prefs().edit().putString("pad.CURSORSPEED", speeds[which]).apply();
+                    padSettings();
+                })
+                .show();
     }
 }

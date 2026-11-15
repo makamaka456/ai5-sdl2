@@ -827,6 +827,21 @@ int main(int argc, char *argv[])
 		free(our_ini_name);
 	}
 
+	// controller settings from the environment (Android launcher):
+	// AI5_CONTROLLER="A=ENTER;B=ESCAPE;LEFTANALOG=CURSOR" (as INI [CONTROLLER])
+	const char *ctl = getenv("AI5_CONTROLLER");
+	if (ctl && *ctl) {
+		char *buf = xstrdup(ctl);
+		for (char *tok = strtok(buf, ";"); tok; tok = strtok(NULL, ";")) {
+			char *eq = strchr(tok, '=');
+			if (!eq)
+				continue;
+			*eq = '\0';
+			cfg_handler(&config, "CONTROLLER", tok, eq + 1);
+		}
+		free(buf);
+	}
+
 	// Korean translation: message archive with .KOR extension
 	if (config.file.mes.arc && config.file.mes.name) {
 		const char *ext = file_extension(config.file.mes.name);

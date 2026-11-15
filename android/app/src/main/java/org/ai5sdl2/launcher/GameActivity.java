@@ -27,6 +27,7 @@ public class GameActivity extends SDLActivity {
     public static final String EXTRA_PATH = "path";
     public static final String EXTRA_ARGS = "args";
     public static final String EXTRA_STRETCH = "stretch";
+    public static final String EXTRA_CONTROLLER = "controller";
 
     private LinearLayout controls;
     private boolean ctrlHeld = false;
@@ -44,6 +45,9 @@ public class GameActivity extends SDLActivity {
         // a tap is a left click; the back button is handled below
         nativeSetenv("SDL_ANDROID_TRAP_BACK_BUTTON", "1");
         // fill the whole screen (ignore the 4:3 aspect ratio) if chosen in the launcher
+        String pad = getIntent().getStringExtra(EXTRA_CONTROLLER);
+        if (pad != null)
+            nativeSetenv("AI5_CONTROLLER", pad);
         nativeSetenv("AI5_STRETCH", getIntent().getBooleanExtra(EXTRA_STRETCH, true) ? "1" : "0");
         ArrayList<String> args = new ArrayList<>();
         String[] extra = getIntent().getStringArrayExtra(EXTRA_ARGS);
@@ -128,7 +132,7 @@ public class GameActivity extends SDLActivity {
         controls.setOrientation(LinearLayout.VERTICAL);
         controls.setGravity(Gravity.END);
 
-        // right click: opens the system menu / cancels
+        // right click: opens the system menu / cancels (ESC)
         Button menu = makeButton("메뉴");
         menu.setOnClickListener(v -> tapKey(KeyEvent.KEYCODE_ESCAPE));
         controls.addView(menu);
@@ -137,6 +141,16 @@ public class GameActivity extends SDLActivity {
         skipButton = makeButton("넘기기");
         skipButton.setOnClickListener(v -> setSkip(!ctrlHeld));
         controls.addView(skipButton);
+
+        // hide the message window (Space)
+        Button hide = makeButton("숨기기");
+        hide.setOnClickListener(v -> tapKey(KeyEvent.KEYCODE_SPACE));
+        controls.addView(hide);
+
+        // backlog (Backspace)
+        Button log = makeButton("지난 대사");
+        log.setOnClickListener(v -> tapKey(KeyEvent.KEYCODE_DEL));
+        controls.addView(log);
 
         Button more = makeButton("⋮");
         more.setOnClickListener(v -> showMoreMenu());
@@ -168,13 +182,16 @@ public class GameActivity extends SDLActivity {
     }
 
     private void showMoreMenu() {
-        String[] items = { "화면 버튼 숨기기 (뒤로 가기로 다시 표시)", "엔터 키", "게임 끝내기" };
+        String[] items = { "화면 버튼 숨기기 (뒤로 가기로 다시 표시)", "엔터 (결정)",
+                "Shift (화면 효과 빨리)", "게임 끝내기" };
         new AlertDialog.Builder(this)
                 .setItems(items, (d, which) -> {
                     if (which == 0) {
                         controls.setVisibility(View.GONE);
                     } else if (which == 1) {
                         tapKey(KeyEvent.KEYCODE_ENTER);
+                    } else if (which == 2) {
+                        tapKey(KeyEvent.KEYCODE_SHIFT_LEFT);
                     } else {
                         new AlertDialog.Builder(this)
                                 .setMessage("게임을 끝낼까요? 저장하지 않은 진행은 사라집니다.")

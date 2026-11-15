@@ -124,3 +124,11 @@ SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./build/ai5 <게임폴더>
   - 자바: `LauncherActivity`(게임 폴더 목록, 폴더 추가→자동 감지, 길게 눌러 한글판 설정), `GameActivity`(SDLActivity, 화면 버튼 메뉴/넘기기/⋮, 뒤로 가기=오른쪽 클릭, 별도 프로세스 `:game`)
   - 게임 파일은 복사하지 않고 "모든 파일 접근" 권한으로 폴더를 직접 읽음. 글꼴은 assets → 앱 폴더로 복사 후 `AI5_DATA_DIR` 환경 변수로 엔진에 알림
 - APK는 GitHub Actions `Android` 워크플로(`.github/workflows/android.yaml`) 산출물 `ai5-launcher-apk` (작업 공간에서는 dl.google.com이 막혀 직접 빌드 불가)
+
+## 꽃과뱀 키 분석 (2026-11-15)
+- 대본은 `System.function[18](키번호, 1)`로 키를 확인(결과 var32[18]). HH2D.exe 0x415210 키표(DirectInput):
+  0 Enter/왼쪽 클릭, 1 ESC/오른쪽 클릭, 2~5 방향키, 6 Shift, 7 Ctrl, 8 Space, 9 Backspace, 10 PgUp, 11 PgDn, 12 Delete, 13~16 Z X C V, 17 Tab, 18 F11, 19 F12
+- 대본이 실제 쓰는 것: 0 결정, 1 메뉴/취소, 6 Shift(화면 효과 빨리), 7 Ctrl(넘기기, 누르는 동안), 8 Space(대사창 숨기기), 9 Backspace(지난 대사), 휠 아래(INI Wheel Mes=1이면 대사 넘김)
+- 안드로이드 화면 버튼: 메뉴(ESC)·넘기기(Ctrl 토글)·숨기기(Space)·지난 대사(Backspace)·⋮(Enter, Shift, 버튼 숨기기, 끝내기). 두 손가락 탭·뒤로 가기 = ESC
+- 게임패드: 엔진의 `[CONTROLLER]` 설정을 환경 변수 `AI5_CONTROLLER="A=ENTER;B=ESCAPE;...;LEFTANALOG=CURSOR"`로 받음. 런처 "게임패드 버튼 설정"에서 버튼별 기능·스틱(커서/방향키/끄기)·커서 속도 지정
+  - 기본값: A 결정, B·START 메뉴, X 넘기기, Y 숨기기, L1 지난 대사, R1 효과 빨리, L2/R2 PgUp/PgDn, 왼쪽 스틱 커서, 오른쪽 스틱 방향키
