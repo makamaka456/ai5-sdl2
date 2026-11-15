@@ -448,8 +448,129 @@ static bool util_buttons(unsigned no, struct param_list *params)
 	return false;
 }
 
+/*
+ * Util(2000): choice dialog of the 2D version (HH2D.exe 0x409790 draws it
+ * natively with sel.gcc). Entries are the defmenu entries. Result in var16[18]:
+ * menu number + 1, or 0 when cancelled (right click -> system menu).
+ * Our version draws simple translucent buttons on overlay 2.
+ */
+#define CHOICE_H     56
+#define CHOICE_STEP  64
+#define CHOICE_MAX   8
+
+static const char *choice_text(unsigned i)
+{
+	uint32_t addr = memory.menu_entry_addresses[i];
+	if (!addr || addr + 1 >= sizeof(struct memory))
+		return "";
+	return mem_get_cstring(addr + 1);
+}
+
+static unsigned text_width(const char *text)
+{
+	unsigned w = 0;
+	while (*text) {
+		int ch;
+		text = ai5_char_to_unicode(text, &ch);
+		w += gfx_text_size_char(ch);
+	}
+	return w;
+}
+
+static void choice_draw(unsigned n, int x, int y0, int w, int hover)
+{
+	SDL_Surface *ov = gfx_get_overlay(2);
+	SDL_CALL(SDL_FillRect, ov, NULL, SDL_MapRGBA(ov->format, 0, 0, 0, 0));
+	gfx_fill(0, 0, 640, 480, WORK_SURFACE, 0);
+	gfx_text_set_colors(0, 0xffffff);
+	for (unsigned i = 0; i < n; i++) {
+		int y = y0 + i * CHOICE_STEP;
+		SDL_Rect border = { x, y, w, CHOICE_H };
+		SDL_Rect inner = { x + 3, y + 3, w - 6, CHOICE_H - 6 };
+		bool hl = (int)i == hover;
+		SDL_CALL(SDL_FillRect, ov, &border, SDL_MapRGBA(ov->format, hl ? 230 : 160, 30, 30, 230));
+		SDL_CALL(SDL_FillRect, ov, &inner, SDL_MapRGBA(ov->format, hl ? 70 : 20, 20, 20, hl ? 220 : 180));
+		const char *text = choice_text(i);
+		int tx = x + (w - (int)text_width(text)) / 2;
+		int ty = y + (CHOICE_H - 22) / 2;
+		while (*text) {
+			int ch;
+			text = ai5_char_to_unicode(text, &ch);
+			tx += gfx_text_draw_glyph(tx, ty, WORK_SURFACE, ch);
+		}
+		SDL_Surface *ts = gfx_get_surface(WORK_SURFACE);
+		SDL_CALL(SDL_SetColorKey, ts, SDL_TRUE, SDL_MapRGB(ts->format, 0, 0, 0));
+		SDL_CALL(SDL_BlitSurface, ts, &inner, ov, &inner);
+		SDL_CALL(SDL_SetColorKey, ts, SDL_FALSE, 0);
+	}
+	gfx_overlay_enable(2);
+	gfx_screen_dirty();
+}
+
+static void util_choice(void)
+{
+	unsigned n = min(menu_count_entries(), CHOICE_MAX);
+	if (!n) {
+		mem_set_var16(18, 1);
+		return;
+	}
+	gfx_text_set_size(20, 0);
+	int w = 0;
+	for (unsigned i = 0; i < n; i++)
+		w = max(w, (int)text_width(choice_text(i)));
+	w = min(max(w + 96, 320), 600);
+	int x = (640 - w) / 2;
+	int y0 = (480 - (int)n * CHOICE_STEP) / 2;
+	int hover = -1, last = -2;
+	unsigned result = 0;
+	input_wait_until_up(INPUT_ACTIVATE);
+	while (true) {
+		unsigned cx, cy;
+		cursor_get_pos(&cx, &cy);
+		int h = -1;
+		if ((int)cx >= x && (int)cx < x + w && (int)cy >= y0) {
+			int i = ((int)cy - y0) / CHOICE_STEP;
+			if (i < (int)n && ((int)cy - y0) % CHOICE_STEP < CHOICE_H)
+				h = i;
+		}
+		if (h >= 0)
+			hover = h;
+		if (input_down(INPUT_UP)) {
+			hover = hover <= 0 ? (int)n - 1 : hover - 1;
+			input_wait_until_up(INPUT_UP);
+		} else if (input_down(INPUT_DOWN)) {
+			hover = hover < 0 || hover >= (int)n - 1 ? 0 : hover + 1;
+			input_wait_until_up(INPUT_DOWN);
+		}
+		if (hover != last) {
+			choice_draw(n, x, y0, w, hover);
+			last = hover;
+		}
+		if (input_down(INPUT_ACTIVATE) && hover >= 0) {
+			input_wait_until_up(INPUT_ACTIVATE);
+			menu_get_no(hover);
+			result = mem_get_sysvar16(mes_sysvar16_menu_no) + 1;
+			break;
+		}
+		if (input_down(INPUT_CANCEL)) {
+			input_wait_until_up(INPUT_CANCEL);
+			result = 0;
+			break;
+		}
+		vm_peek();
+		vm_delay(16);
+	}
+	gfx_overlay_disable(2);
+	gfx_screen_dirty();
+	mem_set_var16(18, result);
+}
+
 static void hanahebi_util(struct param_list *params)
 {
+	if (vm_expr_param(params, 0) == 2000) {
+		util_choice();
+		return;
+	}
 	if (util_buttons(vm_expr_param(params, 0), params))
 		return;
 	switch (vm_expr_param(params, 0)) {
