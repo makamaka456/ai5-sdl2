@@ -512,48 +512,65 @@ static bool util_buttons(unsigned no, struct param_list *params)
  * menu number + 1, or 0 when cancelled (right click -> system menu).
  * Our version draws simple translucent buttons on overlay 2.
  */
-#define CHOICE_H     56
-#define CHOICE_STEP  64
-#define CHOICE_MAX   8
+#define CHOICE_MAX   32
 
-static const char *choice_text(unsigned i)
+static const char *utf8_next(const char *s, int *ch)
 {
-	uint32_t addr = memory.menu_entry_addresses[i];
-	if (!addr || addr + 1 >= sizeof(struct memory))
-		return "";
-	return mem_get_cstring(addr + 1);
+	const uint8_t *p = (const uint8_t*)s;
+	if (p[0] < 0x80) { *ch = p[0]; return s + 1; }
+	if ((p[0] & 0xe0) == 0xc0 && p[1]) { *ch = ((p[0] & 0x1f) << 6) | (p[1] & 0x3f); return s + 2; }
+	if ((p[0] & 0xf0) == 0xe0 && p[1] && p[2]) {
+		*ch = ((p[0] & 0x0f) << 12) | ((p[1] & 0x3f) << 6) | (p[2] & 0x3f);
+		return s + 3;
+	}
+	*ch = '?';
+	return s + 1;
 }
 
-static unsigned text_width(const char *text)
+static unsigned text_width(const char *utf8)
 {
 	unsigned w = 0;
-	while (*text) {
+	while (*utf8) {
 		int ch;
-		text = ai5_char_to_unicode(text, &ch);
+		utf8 = utf8_next(utf8, &ch);
 		w += gfx_text_size_char(ch);
 	}
 	return w;
 }
 
-static void choice_draw(unsigned n, int x, int y0, int w, int hover)
+struct choice_layout {
+	unsigned n, cols, rows;
+	int x0, y0, w, h, step_x, step_y;
+};
+
+static void choice_rect(struct choice_layout *l, unsigned i, SDL_Rect *r)
+{
+	unsigned col = i / l->rows, row = i % l->rows;
+	r->x = l->x0 + col * l->step_x;
+	r->y = l->y0 + row * l->step_y;
+	r->w = l->w;
+	r->h = l->h;
+}
+
+static void choice_draw(struct choice_layout *l, const char **items, int hover)
 {
 	SDL_Surface *ov = gfx_get_overlay(2);
 	SDL_CALL(SDL_FillRect, ov, NULL, SDL_MapRGBA(ov->format, 0, 0, 0, 0));
 	gfx_fill(0, 0, 640, 480, WORK_SURFACE, 0);
 	gfx_text_set_colors(0, 0xffffff);
-	for (unsigned i = 0; i < n; i++) {
-		int y = y0 + i * CHOICE_STEP;
-		SDL_Rect border = { x, y, w, CHOICE_H };
-		SDL_Rect inner = { x + 3, y + 3, w - 6, CHOICE_H - 6 };
+	for (unsigned i = 0; i < l->n; i++) {
+		SDL_Rect border;
+		choice_rect(l, i, &border);
+		SDL_Rect inner = { border.x + 3, border.y + 3, border.w - 6, border.h - 6 };
 		bool hl = (int)i == hover;
 		SDL_CALL(SDL_FillRect, ov, &border, SDL_MapRGBA(ov->format, hl ? 230 : 160, 30, 30, 230));
 		SDL_CALL(SDL_FillRect, ov, &inner, SDL_MapRGBA(ov->format, hl ? 70 : 20, 20, 20, hl ? 220 : 180));
-		const char *text = choice_text(i);
-		int tx = x + (w - (int)text_width(text)) / 2;
-		int ty = y + (CHOICE_H - 22) / 2;
+		const char *text = items[i];
+		int tx = border.x + (border.w - (int)text_width(text)) / 2;
+		int ty = border.y + (border.h - 22) / 2;
 		while (*text) {
 			int ch;
-			text = ai5_char_to_unicode(text, &ch);
+			text = utf8_next(text, &ch);
 			tx += gfx_text_draw_glyph(tx, ty, WORK_SURFACE, ch);
 		}
 		SDL_Surface *ts = gfx_get_surface(WORK_SURFACE);
@@ -565,34 +582,38 @@ static void choice_draw(unsigned n, int x, int y0, int w, int hover)
 	gfx_screen_dirty();
 }
 
-static void util_choice(void)
+// Show a list of buttons; returns the chosen index, or -1 if cancelled.
+static int choice_run(const char **items, unsigned n)
 {
-	unsigned n = min(menu_count_entries(), CHOICE_MAX);
-	if (!n) {
-		mem_set_var16(18, 1);
-		return;
-	}
+	struct choice_layout l = { .n = n };
 	gfx_text_set_size(20, 0);
-	int w = 0;
+	int tw = 0;
 	for (unsigned i = 0; i < n; i++)
-		w = max(w, (int)text_width(choice_text(i)));
-	w = min(max(w + 96, 320), 600);
-	int x = (640 - w) / 2;
-	int y0 = (480 - (int)n * CHOICE_STEP) / 2;
-	int hover = -1, last = -2;
-	unsigned result = 0;
+		tw = max(tw, (int)text_width(items[i]));
+	if (n <= 6) {
+		l.cols = 1; l.rows = n;
+		l.h = 56; l.step_y = 64;
+		l.w = min(max(tw + 96, 320), 600);
+	} else {
+		l.cols = (n + 9) / 10; l.rows = (n + l.cols - 1) / l.cols;
+		l.h = 36; l.step_y = 40;
+		l.w = min(max(tw + 40, 180), 600 / (int)l.cols - 8);
+	}
+	l.step_x = l.w + 8;
+	l.x0 = (640 - ((int)l.cols * l.step_x - 8)) / 2;
+	l.y0 = (480 - ((int)l.rows * l.step_y - (l.step_y - l.h))) / 2;
+
+	int hover = -1, last = -2, result = -1;
 	input_wait_until_up(INPUT_ACTIVATE);
 	while (true) {
 		unsigned cx, cy;
 		cursor_get_pos(&cx, &cy);
-		int h = -1;
-		if ((int)cx >= x && (int)cx < x + w && (int)cy >= y0) {
-			int i = ((int)cy - y0) / CHOICE_STEP;
-			if (i < (int)n && ((int)cy - y0) % CHOICE_STEP < CHOICE_H)
-				h = i;
+		for (unsigned i = 0; i < n; i++) {
+			SDL_Rect r;
+			choice_rect(&l, i, &r);
+			if ((int)cx >= r.x && (int)cx < r.x + r.w && (int)cy >= r.y && (int)cy < r.y + r.h)
+				hover = i;
 		}
-		if (h >= 0)
-			hover = h;
 		if (input_down(INPUT_UP)) {
 			hover = hover <= 0 ? (int)n - 1 : hover - 1;
 			input_wait_until_up(INPUT_UP);
@@ -601,18 +622,17 @@ static void util_choice(void)
 			input_wait_until_up(INPUT_DOWN);
 		}
 		if (hover != last) {
-			choice_draw(n, x, y0, w, hover);
+			choice_draw(&l, items, hover);
 			last = hover;
 		}
 		if (input_down(INPUT_ACTIVATE) && hover >= 0) {
 			input_wait_until_up(INPUT_ACTIVATE);
-			menu_get_no(hover);
-			result = mem_get_sysvar16(mes_sysvar16_menu_no) + 1;
+			result = hover;
 			break;
 		}
 		if (input_down(INPUT_CANCEL)) {
 			input_wait_until_up(INPUT_CANCEL);
-			result = 0;
+			result = -1;
 			break;
 		}
 		vm_peek();
@@ -620,7 +640,113 @@ static void util_choice(void)
 	}
 	gfx_overlay_disable(2);
 	gfx_screen_dirty();
+	return result;
+}
+
+static void util_choice(void)
+{
+	unsigned n = min(menu_count_entries(), CHOICE_MAX);
+	if (!n) {
+		mem_set_var16(18, 1);
+		return;
+	}
+	string items[CHOICE_MAX];
+	for (unsigned i = 0; i < n; i++) {
+		uint32_t addr = memory.menu_entry_addresses[i];
+		const char *t = (addr && addr + 1 < sizeof(struct memory)) ? mem_get_cstring(addr + 1) : "";
+		items[i] = ai5_cstring_to_utf8(t ? t : "", 0);
+	}
+	int r = choice_run((const char**)items, n);
+	for (unsigned i = 0; i < n; i++)
+		string_free(items[i]);
+	unsigned result = 0;
+	if (r >= 0) {
+		menu_get_no(r);
+		result = mem_get_sysvar16(mes_sysvar16_menu_no) + 1;
+	}
 	mem_set_var16(18, result);
+}
+
+/*
+ * 2D map (Util 1000-1100, HH2D.exe 0x401000-0x409000).
+ * The original walks a node graph with pre-rendered views (F00_nnn_dd.map)
+ * and returns the room whose door was clicked in var32[12] (Util 1001).
+ * For now we offer a room list instead (rooms 1-21, labels from MAPPT.GCC).
+ * Right click returns 100 (system menu).
+ */
+static const struct { unsigned id; const char *name; } map_rooms[] = {
+	{  1, "큰 홀" },
+	{  2, "홈 바" },
+	{  3, "카와다의 방" },
+	{  4, "시즈코의 방" },
+	{  5, "케이코의 방" },
+	{  6, "쿄코의 방" },
+	{  7, "미츠코의 방" },
+	{  8, "사요코의 방" },
+	{  9, "모리타의 방" },
+	{ 10, "요시자와의 방" },
+	{ 11, "조직원의 방" },
+	{ 12, "하자쿠라단의 방" },
+	{ 13, "예배당" },
+	{ 14, "욕실" },
+	{ 15, "현관" },
+	{ 16, "주방" },
+	{ 17, "지하" },
+	{ 18, "조교실" },
+	{ 21, "???" },
+};
+
+/*
+ * Pre-rendered map views: 1024-byte BGRx palette + 640x480 8-bit pixels.
+ * Name: F<variant>_<node>_<dir 0-7>.map (B00 for the basement); falls back
+ * to variant 00 when the variant has no own view.
+ */
+static bool map_draw_view(unsigned floor, unsigned variant, unsigned node, unsigned dir, unsigned dst)
+{
+	char name[32];
+	struct archive_data *file = NULL;
+	if (floor == 0 && variant) {
+		snprintf(name, sizeof(name), "F%02u_%03u_%02u.MAP", variant, node, dir);
+		file = asset_data_load(name);
+	}
+	if (!file) {
+		snprintf(name, sizeof(name), "%c00_%03u_%02u.MAP", floor ? 'B' : 'F', node, dir);
+		file = asset_data_load(name);
+	}
+	if (!file)
+		return false;
+	if (file->size < 1024 + 640 * 480) {
+		archive_data_release(file);
+		return false;
+	}
+	struct cg *cg = cg_alloc_direct(640, 480);
+	const uint8_t *pal = file->data;
+	const uint8_t *px = file->data + 1024;
+	for (unsigned i = 0; i < 640 * 480; i++) {
+		cg->pixels[i*4+0] = pal[px[i]*4+2];
+		cg->pixels[i*4+1] = pal[px[i]*4+1];
+		cg->pixels[i*4+2] = pal[px[i]*4+0];
+		cg->pixels[i*4+3] = 255;
+	}
+	archive_data_release(file);
+	gfx_draw_cg(dst, cg);
+	cg_free(cg);
+	return true;
+}
+
+static void util_map_select(void)
+{
+	// show the current view behind the room list
+	unsigned dir = mem_get_var16(3);
+	if (dir == 1) dir = 3; else if (dir == 3) dir = 1; // see HH2D.exe 0x407f40
+	if (map_draw_view(0, mem_get_var4(2097), mem_get_var16(10), (dir & 3) * 2, 0))
+		gfx_screen_dirty();
+
+	const char *items[ARRAY_SIZE(map_rooms)];
+	for (unsigned i = 0; i < ARRAY_SIZE(map_rooms); i++)
+		items[i] = map_rooms[i].name;
+	int r = choice_run(items, ARRAY_SIZE(map_rooms));
+	mem_set_var32(12, r < 0 ? 100 : map_rooms[r].id);
 }
 
 static void hanahebi_util(struct param_list *params)
@@ -635,6 +761,10 @@ static void hanahebi_util(struct param_list *params)
 		}
 		NOTICE("Util(%s) [%s]", str, mem_mes_name());
 		string_free(str);
+	}
+	if (vm_expr_param(params, 0) == 1001) {
+		util_map_select();
+		return;
 	}
 	if (vm_expr_param(params, 0) == 2000) {
 		util_choice();

@@ -1442,6 +1442,16 @@ void vm_stmt_nop(void)
  */
 void vm_load_mes_with_table(char *name)
 {
+	// debugging: AI5_REDIRECT_MES="FROM.MES=TO.MES" loads TO instead of FROM
+	static char redirect_to[64];
+	const char *rd = getenv("AI5_REDIRECT_MES");
+	if (rd) {
+		const char *eq = strchr(rd, '=');
+		if (eq && (size_t)(eq - rd) == strlen(name) && !strncasecmp(rd, name, eq - rd)) {
+			strncpy(redirect_to, eq + 1, sizeof(redirect_to) - 1);
+			name = redirect_to;
+		}
+	}
 	char *mem_name = mem_mes_name();
 	if (name != mem_name)
 		strcpy(mem_name, name);
