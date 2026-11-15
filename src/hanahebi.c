@@ -2200,7 +2200,7 @@ static void hanahebi_util(struct param_list *params)
 		break;
 	case 1000: // create the map (our map needs no setup)
 	case 1009: case 1020: case 1024: case 1025: // no-ops in HH2D.exe
-	case 100: case 111: case 1026: case 1028:  // not handled by HH2D.exe
+	case 1: case 100: case 111: case 1026: case 1028:  // not handled by HH2D.exe (1 = 3D fades)
 	case 66: case 67: // 3D objects (not created in the 2D version)
 		break;
 	case 80: // (80, 0): a "deck" of 10 bytes at 0x2568, count at 0x2572
