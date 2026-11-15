@@ -141,3 +141,20 @@ target_link_libraries(main PRIVATE ai5 SDL2::SDL2 SDL2_ttf::SDL2_ttf SDL2_mixer:
 if(ANDROID)
 	target_link_libraries(main PRIVATE log android)
 endif()
+
+# --- FFmpeg (optional; built by android/build-ffmpeg.sh): movie playback ---
+set(FFMPEG ${DEPS}/ffmpeg-build/${ANDROID_ABI})
+if(EXISTS ${FFMPEG}/lib/libavformat.a)
+	message(STATUS "FFmpeg found for ${ANDROID_ABI}: movie playback enabled")
+	target_sources(main PRIVATE ${ENGINE}/movie.c)
+	target_compile_definitions(main PRIVATE HAVE_FFMPEG)
+	target_include_directories(main PRIVATE ${FFMPEG}/include)
+	target_link_libraries(main PRIVATE
+		${FFMPEG}/lib/libavformat.a
+		${FFMPEG}/lib/libavcodec.a
+		${FFMPEG}/lib/libswscale.a
+		${FFMPEG}/lib/libavutil.a
+		z)
+else()
+	message(STATUS "FFmpeg not found for ${ANDROID_ABI}: movies disabled")
+endif()

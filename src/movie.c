@@ -63,6 +63,10 @@ struct movie_context {
 	int voice;
 	int volume;
 	bool interleaved;
+#ifdef USE_SDL_MIXER
+	SDL_AudioStream *mix_stream;
+	bool mix_hooked;
+#endif
 
 	// Time keeping data. Written by audio handler and referenced by video
 	// handler (i.e. we sync the video to the audio).
@@ -225,6 +229,94 @@ static int audio_callback(sts_mixer_sample_t *sample, void *data)
 }
 #endif
 
+#ifdef USE_SDL_MIXER
+#include <SDL_mixer.h>
+/*
+ * SDL_mixer build: the audio track is played through Mix_HookMusic (the BGM
+ * is stopped while a movie plays). Decoded frames are converted to the
+ * mixer's output format with an SDL_AudioStream.
+ */
+static bool mix_feed(struct movie_context *mc)
+{
+	if (!decode_frame(&mc->audio))
+		return false;
+	AVFrame *f = mc->audio.frame;
+	int ch = mc->audio.ctx->ch_layout.nb_channels;
+	int n = f->nb_samples;
+	int16_t *buf = xmalloc(n * 2 * sizeof(int16_t));
+	for (int i = 0; i < n; i++) {
+		for (int c = 0; c < 2; c++) {
+			int sc = c < ch ? c : 0;
+			int v = 0;
+			switch (mc->audio.ctx->sample_fmt) {
+			case AV_SAMPLE_FMT_S16: v = ((int16_t*)f->data[0])[i * ch + sc]; break;
+			case AV_SAMPLE_FMT_S16P: v = ((int16_t*)f->data[sc])[i]; break;
+			case AV_SAMPLE_FMT_FLT: v = ((float*)f->data[0])[i * ch + sc] * 32767.f; break;
+			case AV_SAMPLE_FMT_FLTP: v = ((float*)f->data[sc])[i] * 32767.f; break;
+			case AV_SAMPLE_FMT_S32: v = ((int32_t*)f->data[0])[i * ch + sc] >> 16; break;
+			case AV_SAMPLE_FMT_S32P: v = ((int32_t*)f->data[sc])[i] >> 16; break;
+			default: break;
+			}
+			v = v * mc->volume / 100;
+			buf[i * 2 + c] = v > 32767 ? 32767 : (v < -32768 ? -32768 : v);
+		}
+	}
+	SDL_AudioStreamPut(mc->mix_stream, buf, n * 2 * sizeof(int16_t));
+	free(buf);
+	SDL_LockMutex(mc->timer_mutex);
+	mc->stream_time += (double)n / mc->audio.ctx->sample_rate;
+	mc->wall_time_ms = SDL_GetTicks();
+	SDL_UnlockMutex(mc->timer_mutex);
+	return true;
+}
+
+static void mix_hook(void *data, Uint8 *out, int len)
+{
+	struct movie_context *mc = data;
+	int got = 0;
+	while (got < len) {
+		int r = SDL_AudioStreamGet(mc->mix_stream, out + got, len - got);
+		if (r > 0) {
+			got += r;
+			continue;
+		}
+		if (mc->audio.finished || !mix_feed(mc)) {
+			if (!mc->audio.finished) {
+				SDL_AudioStreamFlush(mc->mix_stream);
+				r = SDL_AudioStreamGet(mc->mix_stream, out + got, len - got);
+				if (r > 0) {
+					got += r;
+					continue;
+				}
+			}
+			mc->audio.finished = true;
+			break;
+		}
+	}
+	if (got < len)
+		memset(out + got, 0, len - got);
+}
+
+static void mix_start(struct movie_context *mc)
+{
+	int freq, channels;
+	Uint16 format;
+	if (!Mix_QuerySpec(&freq, &format, &channels)) {
+		mc->audio.finished = true;
+		return;
+	}
+	mc->mix_stream = SDL_NewAudioStream(AUDIO_S16SYS, 2, mc->audio.ctx->sample_rate,
+			format, channels, freq);
+	if (!mc->mix_stream) {
+		WARNING("SDL_NewAudioStream: %s", SDL_GetError());
+		mc->audio.finished = true;
+		return;
+	}
+	Mix_HookMusic(mix_hook, mc);
+	mc->mix_hooked = true;
+}
+#endif
+
 static AVStream *open_stream(AVFormatContext *ctx, unsigned type)
 {
 	if (avformat_find_stream_info(ctx, NULL) < 0) {
@@ -325,10 +417,6 @@ struct movie_context *movie_load(const char *movie_path, const char *audio_path,
 {
 	struct movie_context *mc = xcalloc(1, sizeof(struct movie_context));
 	mc->voice = -1;
-
-#ifdef USE_SDL_MIXER
-	audio_path = NULL;
-#endif
 
 	AVFormatContext *video_ctx = open_input_file(movie_path);
 	AVFormatContext *audio_ctx = audio_path ? open_input_file(audio_path) : NULL;
@@ -458,6 +546,12 @@ void movie_free(struct movie_context *mc)
 		free(mc->sts_stream.sample.data);
 #endif
 
+#ifdef USE_SDL_MIXER
+	if (mc->mix_hooked)
+		Mix_HookMusic(NULL, NULL);
+	if (mc->mix_stream)
+		SDL_FreeAudioStream(mc->mix_stream);
+#endif
 	if (mc->timer_mutex)
 		SDL_DestroyMutex(mc->timer_mutex);
 
@@ -589,6 +683,9 @@ bool movie_play(struct movie_context *mc)
 		}
 		mc->voice = mixer_sts_stream_play(&mc->sts_stream, mc->volume);
 	}
+#else
+	if (mc->audio.stream)
+		mix_start(mc);
 #endif
 
 	if (!mc->audio.stream)
@@ -611,7 +708,9 @@ int movie_get_position(struct movie_context *mc)
 
 bool movie_set_volume(struct movie_context *mc, int volume)
 {
-#ifndef USE_SDL_MIXER
+#ifdef USE_SDL_MIXER
+	mc->volume = volume;
+#else
 	mc->volume = volume;
 	if (mc->voice >= 0)
 		mixer_sts_stream_set_volume(mc->voice, volume);

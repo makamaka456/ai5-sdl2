@@ -43,6 +43,15 @@ jobs:
     - name: Fetch native dependencies
       run: android/fetch-deps.sh
 
+    - name: Cache FFmpeg build
+      uses: actions/cache@v4
+      with:
+        path: android/app/jni/deps/ffmpeg-build
+        key: ffmpeg-n6.1.2-${{ hashFiles('android/build-ffmpeg.sh') }}
+
+    - name: Build FFmpeg (movie playback)
+      run: android/build-ffmpeg.sh
+
     - name: Build APK
       working-directory: android
       run: gradle --no-daemon assembleRelease

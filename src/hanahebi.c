@@ -52,6 +52,9 @@
 #include "menu.h"
 #include "cursor.h"
 #include "vm_private.h"
+#ifdef HAVE_FFMPEG
+#include "movie.h"
+#endif
 
 /*
  * Load a CG as a private copy. asset_cg_load() returns a CG shared with the
@@ -176,7 +179,7 @@ static void work_text(int x, int y, const char *text);
 	}
 SYS_STUB(3)
 
-SYS_STUB(23) SYS_STUB(28)
+SYS_STUB(28)
 
 /*
  * Character sprites (Util 50, HH2D.exe 0x429xxx/0x42axxx).
@@ -1661,13 +1664,65 @@ static void hanahebi_cursor(struct param_list *params)
  *   (0, section, key)         var16[18] = value
  *   (1, section, key, value)  set value
  */
+/*
+ * System.function[23](0, "hebi_op.vsd"): play a movie (MPEG-1 program stream
+ * with a small header; libavformat probes it fine). Click/ESC/Ctrl skips.
+ */
+static void hanahebi_movie(struct param_list *params)
+{
+	if (vm_expr_param(params, 0) != 0 || params->nr_params < 2) {
+		log_unimplemented("System.function", 23, params);
+		return;
+	}
+	const char *name = vm_string_param(params, 1);
+#ifdef HAVE_FFMPEG
+	char *path = path_get_icase(name);
+	if (!path) {
+		WARNING("movie not found: %s", name);
+		return;
+	}
+	struct movie_context *mc = movie_load(path, path, 640, 480);
+	free(path);
+	if (!mc) {
+		WARNING("failed to load movie: %s", name);
+		return;
+	}
+	audio_stop(AUDIO_CH_BGM);
+	movie_play(mc);
+	gfx_display_freeze();
+	input_wait_until_up(INPUT_ACTIVATE);
+	while (!movie_is_end(mc)) {
+		int r = movie_draw(mc);
+		if (r < 0)
+			break;
+		if (r > 0)
+			SDL_RenderPresent(gfx.renderer);
+		vm_peek();
+		if (input_down(INPUT_ACTIVATE) || input_down(INPUT_CANCEL)
+				|| input_down(INPUT_CTRL))
+			break;
+	}
+	movie_free(mc);
+	gfx_display_unfreeze();
+	input_wait_until_up(INPUT_ACTIVATE);
+	input_wait_until_up(INPUT_CANCEL);
+	// the script draws the next screen itself; start from black
+	SDL_Surface *s = gfx_get_surface(0);
+	SDL_FillRect(s, NULL, SDL_MapRGB(s->format, 0, 0, 0));
+	gfx_whole_surface_dirty(0);
+#else
+	WARNING("movie playback not supported in this build: %s", name);
+#endif
+}
+
 static void hanahebi_settings(struct param_list *params)
 {
 	const char *section = vm_string_param(params, 1);
 	const char *key = vm_string_param(params, 2);
 	if (vm_expr_param(params, 0) == 0) {
 		const char *v = config_ini_get(section, key);
-		mem_set_var16(18, v ? atoi(v) : 0);
+		// GetPrivateProfileInt: param 3 is the default value
+		mem_set_var16(18, v ? atoi(v) : param_or(params, 3, 0));
 	} else {
 		char buf[16];
 		snprintf(buf, sizeof(buf), "%u", (unsigned)param_or(params, 3, 0));
@@ -3688,7 +3743,7 @@ struct game game_hanahebi = {
 		[18] = hanahebi_check_input,
 		[19] = hanahebi_backlog,
 		[20] = hanahebi_strlen,
-		[23] = sys_stub_23,
+		[23] = hanahebi_movie,
 		[24] = hanahebi_screen_records,
 		[26] = hanahebi_read_flags,
 		[27] = hanahebi_settings,

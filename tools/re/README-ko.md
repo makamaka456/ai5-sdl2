@@ -35,3 +35,15 @@ HH_DEBUG_TEXT=1              # 대사 위치·대사창 보이기/숨기기 기�
 - 설치: /opt/ghidra (ghidra_11.2.1_PUBLIC). 없으면 github 릴리즈에서 받는다.
 - 전체 디컴파일 결과: 비공개 저장소 `notes/ghidra/HH2D.decompiled.c` (`fn.sh 주소`로 함수 보기)
 - 놓친 함수: `analyzeHeadless gproj2 hh2d -import HH2D.exe` 한 번 → `dec.sh out.c 0x주소...`
+
+## 원본(HH2D.exe)을 Wine으로 실행해 비교하기 (2026-11-15)
+```
+dpkg --add-architecture i386 && apt-get update && apt-get install -y wine wine32:i386 pulseaudio
+pulseaudio --start --exit-idle-time=-1 && pactl load-module module-null-sink   # 없으면 "DirectSound 초기화 실패"
+Xvfb :99 -screen 0 1280x800x24 &
+DISPLAY=:99 wine regedit tools/re/hanahebi-wine.reg     # 없으면 "게임이 설치되지 않았습니다"
+#  가상 데스크톱(없으면 "DirectDraw Object 생성 실패"): HKCU\Software\Wine\Explorer Desktop=Default, Desktops\Default=800x600
+cd /home/user/gamedata/hanahebi && DISPLAY=:99 wine HH2D.exe
+```
+- 주의: regedit 등을 DISPLAY 없이 실행하면 wineserver가 화면 없이 떠서 이후 실행이 "no driver" 오류. `wineserver -k` 후 다시.
+- 확인 결과: 원본 시작은 elf 로고 페이드 인/아웃 → 타이틀 (요정 애니메이션 없음, 우리와 같음).

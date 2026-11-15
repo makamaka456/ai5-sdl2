@@ -1,0 +1,6 @@
+REGEDIT4
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\elf\HANAHEBI]
+"InstPath"="Z:\\home\\user\\gamedata\\hanahebi"
+"InstExec"="Z:\\home\\user\\gamedata\\hanahebi\\HANAHEBI.EXE"
+"InstallMedia"=dword:00000001
