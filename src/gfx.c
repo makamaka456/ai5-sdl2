@@ -77,6 +77,7 @@ struct gfx gfx = {0};
 struct gfx_view gfx_view = { 640, 400 };
 static bool gfx_stretch = false;
 static void gfx_update_stretch(void);
+static bool env_flag(const char *name);
 
 void gfx_dirty(unsigned surface, int x, int y, int w, int h)
 {
@@ -376,8 +377,7 @@ void gfx_init(const char *name)
 	SDL_CALL(SDL_SetRenderDrawColor, gfx.renderer, 0, 0, 0, SDL_ALPHA_OPAQUE);
 	// AI5_STRETCH=1 (Android option): fill the whole screen, ignoring the
 	// aspect ratio. Otherwise the picture keeps its aspect ratio.
-	const char *stretch = getenv("AI5_STRETCH");
-	gfx_stretch = stretch && atoi(stretch) != 0;
+	gfx_stretch = env_flag("AI5_STRETCH");
 	if (!gfx_stretch)
 		SDL_CALL(SDL_RenderSetLogicalSize, gfx.renderer, gfx_view.w, gfx_view.h);
 	gfx_update_stretch();
@@ -385,9 +385,29 @@ void gfx_init(const char *name)
 	atexit(gfx_fini);
 }
 
-// scale the picture to the output size (stretch mode)
+static bool env_flag(const char *name)
+{
+	const char *v = getenv(name);
+	return v && atoi(v) != 0;
+}
+
+/*
+ * Display mode (Android): AI5_STRETCH=1 fills the screen ignoring the aspect
+ * ratio; both it and AI5_BACKGROUND (a PNG drawn behind the game over the
+ * whole screen) may change while the game runs, so they are checked here.
+ */
 static void gfx_update_stretch(void)
 {
+	bool stretch = env_flag("AI5_STRETCH");
+	if (stretch != gfx_stretch) {
+		gfx_stretch = stretch;
+		if (stretch) {
+			SDL_RenderSetLogicalSize(gfx.renderer, 0, 0);
+		} else {
+			SDL_RenderSetScale(gfx.renderer, 1.f, 1.f);
+			SDL_RenderSetLogicalSize(gfx.renderer, gfx_view.w, gfx_view.h);
+		}
+	}
 	if (!gfx_stretch)
 		return;
 	int w, h;
@@ -398,6 +418,58 @@ static void gfx_update_stretch(void)
 	SDL_RenderGetScale(gfx.renderer, &cx, &cy);
 	if (cx != sx || cy != sy)
 		SDL_RenderSetScale(gfx.renderer, sx, sy);
+}
+
+static SDL_Texture *bg_texture = NULL;
+static int bg_w, bg_h;
+static char bg_loaded[1024] = "";
+
+static void gfx_load_background(const char *path)
+{
+	snprintf(bg_loaded, sizeof(bg_loaded), "%s", path ? path : "");
+	if (bg_texture) {
+		SDL_DestroyTexture(bg_texture);
+		bg_texture = NULL;
+	}
+	if (!path || !*path)
+		return;
+	size_t size;
+	uint8_t *data = file_read(path, &size);
+	if (!data)
+		return;
+	struct cg *cg = cg_load(data, size, CG_TYPE_PNG);
+	free(data);
+	if (!cg)
+		return;
+	bg_texture = SDL_CreateTexture(gfx.renderer, SDL_PIXELFORMAT_RGBA32,
+			SDL_TEXTUREACCESS_STATIC, cg->metrics.w, cg->metrics.h);
+	if (bg_texture)
+		SDL_UpdateTexture(bg_texture, NULL, cg->pixels, cg->metrics.w * 4);
+	bg_w = cg->metrics.w;
+	bg_h = cg->metrics.h;
+	cg_free(cg);
+}
+
+// draw the background picture over the whole screen (cropped to fill it)
+static void gfx_draw_background(void)
+{
+	const char *path = getenv("AI5_BACKGROUND");
+	if (strcmp(path ? path : "", bg_loaded))
+		gfx_load_background(path);
+	if (!bg_texture || gfx_stretch)
+		return;
+	int w, h;
+	if (SDL_GetRendererOutputSize(gfx.renderer, &w, &h) || w <= 0 || h <= 0)
+		return;
+	// draw in output pixels, then restore the logical size for the game
+	SDL_RenderSetLogicalSize(gfx.renderer, 0, 0);
+	SDL_RenderSetScale(gfx.renderer, 1.f, 1.f);
+	SDL_RenderSetViewport(gfx.renderer, NULL);
+	float scale = max((float)w / bg_w, (float)h / bg_h);
+	int sw = (int)(w / scale), sh = (int)(h / scale);
+	SDL_Rect src = { (bg_w - sw) / 2, (bg_h - sh) / 2, sw, sh };
+	SDL_RenderCopy(gfx.renderer, bg_texture, &src, NULL);
+	SDL_RenderSetLogicalSize(gfx.renderer, gfx_view.w, gfx_view.h);
 }
 
 void gfx_update(void)
@@ -429,6 +501,7 @@ void gfx_update(void)
 	}
 	gfx_update_stretch();
 	SDL_CALL(SDL_RenderClear, gfx.renderer);
+	gfx_draw_background();
 	if (gfx_display_offset_x || gfx_display_offset_y) {
 		// screen shake
 		SDL_Rect dst = { gfx_display_offset_x, gfx_display_offset_y, gfx_view.w, gfx_view.h };
