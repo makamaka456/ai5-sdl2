@@ -162,6 +162,7 @@ static bool msgwin_visible;
 static int msgwin_icon_state;
 static void apply_volume(enum audio_channel ch, const char *section);
 static bool setting_enabled(const char *section, const char *key);
+static bool confirm(const char *question);
 static void util_scroll(struct param_list *params);
 static void util_room(struct param_list *params);
 static void util_ending_mode(unsigned last_tab);
@@ -799,6 +800,8 @@ static void util_choice(void)
 	if (r >= 0) {
 		menu_get_no(r);
 		result = mem_get_sysvar16(mes_sysvar16_menu_no) + 1;
+		// the next defmenu starts a new menu (cancel asks again with these)
+		menu_reset();
 	}
 	mem_set_var16(18, result);
 }
@@ -2183,6 +2186,28 @@ static void util_status(void)
 	}
 }
 
+/*
+ * Util 15000: menu while replaying a scene (var4[3014] != 0; HH2D.exe shows a
+ * menu bar). var16[18]: 2 backlog, 3 hide the message window, 9 settings,
+ * 10 end the replay (the script then asks with Util 16000), 11 close.
+ * Util 16000: "end the replay?" -> var16[18] = 1 yes, 0 no.
+ */
+static void util_replay_menu(void)
+{
+	static const struct { const char *text; unsigned code; } items[] = {
+		{ "지난 대사 보기", 2 },
+		{ "메시지창 숨기기", 3 },
+		{ "환경 설정", 9 },
+		{ "회상 끝내기", 10 },
+		{ "돌아가기", 11 },
+	};
+	const char *text[ARRAY_SIZE(items)];
+	for (unsigned i = 0; i < ARRAY_SIZE(items); i++)
+		text[i] = items[i].text;
+	int r = choice_run(text, ARRAY_SIZE(items));
+	mem_set_var16(18, r < 0 ? 11 : items[r].code);
+}
+
 static void hanahebi_util(struct param_list *params)
 {
 	if (getenv("HH_DEBUG_UTIL") && vm_expr_param(params, 0) != 9000 && vm_expr_param(params, 0) != 504) {
@@ -2411,6 +2436,12 @@ static void hanahebi_util(struct param_list *params)
 		break;
 	case 7000:
 		util_status();
+		break;
+	case 15000:
+		util_replay_menu();
+		break;
+	case 16000:
+		mem_set_var16(18, confirm("회상을 끝낼까요?") ? 1 : 0);
 		break;
 	case 8000:
 		if (param_or(params, 1, 0) == 1)
