@@ -1108,13 +1108,20 @@ static const char *map_room_name(int room)
 	return NULL;
 }
 
+// Util 1041 (4 wav names) sets other footsteps, Util 1042 restores these
+static char map_steps[4][32];
+static bool map_custom_steps = false;
+
 static void map_footstep(void)
 {
 	static unsigned n = 0;
 	static const char *steps[] = { "hh_179.wav", "hh_180.wav", "hh_181.wav" };
 	if (!setting_enabled("Se", "IsSe"))
 		return;
-	audio_se_play(steps[n++ % 3], 1);
+	if (map_custom_steps)
+		audio_se_play(map_steps[n++ % 4], 1);
+	else
+		audio_se_play(steps[n++ % 3], 1);
 	apply_volume(AUDIO_CH_SE(1), "Effect");
 }
 
@@ -1214,6 +1221,12 @@ static void map_ambient_command(unsigned no, struct param_list *params)
 			map_ambient_stop();
 		map_amb[i].enabled = false;
 		memory_raw[0x9e0 + i] = 1;
+		return;
+	case 1038: // enable again
+		if (i < 0)
+			return;
+		map_amb[i].enabled = true;
+		memory_raw[0x9e0 + i] = 0;
 		return;
 	}
 }
@@ -2054,8 +2067,21 @@ static void hanahebi_util(struct param_list *params)
 	case 1100: // map closed
 		map_nr_people = 0;
 		break;
-	case 1036: case 1037: case 1039:
+	case 1036: case 1037: case 1038: case 1039:
 		map_ambient_command(vm_expr_param(params, 0), params);
+		break;
+	case 1041: // other footsteps: 4 wav names
+		for (unsigned k = 0; k < 4; k++) {
+			const char *nm = params->nr_params > k + 1 && params->params[k + 1].type == MES_PARAM_STRING
+				? params->params[k + 1].str : "hh_179.wav";
+			snprintf(map_steps[k], sizeof(map_steps[k]), "%.31s", nm);
+		}
+		map_custom_steps = true;
+		break;
+	case 1042:
+		map_custom_steps = false;
+		break;
+	case 1016: case 1030: // not handled by HH2D.exe
 		break;
 	case 1004: // stop the map sounds
 		map_ambient_stop();
