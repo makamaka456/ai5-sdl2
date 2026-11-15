@@ -2208,6 +2208,73 @@ static void util_replay_menu(void)
 	mem_set_var16(18, r < 0 ? 11 : items[r].code);
 }
 
+/*
+ * Util 30000: staff roll (HH2D.exe 0x46d4e0; roll01-05.gcc are tall pictures
+ * of credits). (30000, 0): roll01, roll02, roll03 then roll04; (30000, 1):
+ * roll05 then roll04. Each tall picture scrolls up over black at its own x;
+ * roll04 is shown in place. Ctrl/Shift = faster, ESC = skip.
+ */
+static bool staff_roll_one(const char *name, bool scroll)
+{
+	struct cg *cg = hh_cg_load(name);
+	if (!cg)
+		return true;
+	if (cg->palette || cg->metrics.bpp == 8) {
+		cg_free(cg);
+		return true;
+	}
+	for (size_t i = 0; i < (size_t)cg->metrics.w * cg->metrics.h; i++)
+		cg->pixels[i * 4 + 3] = 255;
+	SDL_Surface *img = SDL_CreateRGBSurfaceWithFormatFrom(cg->pixels, cg->metrics.w,
+			cg->metrics.h, 32, cg->metrics.w * 4, SDL_PIXELFORMAT_RGBA32);
+	// the alpha channel of these pictures does not match the text: draw them
+	// opaque (their background is black like the screen)
+	SDL_SetSurfaceBlendMode(img, SDL_BLENDMODE_NONE);
+	SDL_Surface *ov = gfx_get_overlay(2);
+	bool go_on = true;
+	int y = scroll ? 480 : cg->metrics.y;
+	uint32_t shown = SDL_GetTicks();
+	while (true) {
+		SDL_CALL(SDL_FillRect, ov, NULL, SDL_MapRGBA(ov->format, 0, 0, 0, 255));
+		SDL_Rect d = { cg->metrics.x, y, cg->metrics.w, cg->metrics.h };
+		SDL_BlitSurface(img, NULL, ov, &d);
+		gfx_overlay_enable(2);
+		gfx_screen_dirty();
+		vm_peek();
+		vm_delay(20);
+		if (input_down(INPUT_CANCEL)) {
+			input_wait_until_up(INPUT_CANCEL);
+			go_on = false;
+			break;
+		}
+		if (scroll) {
+			y -= input_down(INPUT_CTRL) || input_down(INPUT_SHIFT) ? 4 : 1;
+			if (y + (int)cg->metrics.h < 0)
+				break;
+		} else if (SDL_GetTicks() - shown > 4000 || input_down(INPUT_ACTIVATE)) {
+			break;
+		}
+	}
+	SDL_FreeSurface(img);
+	cg_free(cg);
+	return go_on;
+}
+
+static void util_staff_roll(unsigned which)
+{
+	if (which == 0) {
+		if (staff_roll_one("roll01.gcc", true) && staff_roll_one("roll02.gcc", true)
+				&& staff_roll_one("roll03.gcc", true))
+			staff_roll_one("roll04.gcc", false);
+	} else {
+		if (staff_roll_one("roll05.gcc", true))
+			staff_roll_one("roll04.gcc", false);
+	}
+	gfx_overlay_disable(2);
+	gfx_screen_dirty();
+	// HH2D.exe does not set a result
+}
+
 static void hanahebi_util(struct param_list *params)
 {
 	if (getenv("HH_DEBUG_UTIL") && vm_expr_param(params, 0) != 9000 && vm_expr_param(params, 0) != 504) {
@@ -2439,6 +2506,18 @@ static void hanahebi_util(struct param_list *params)
 		break;
 	case 15000:
 		util_replay_menu();
+		break;
+	case 30000:
+		util_staff_roll(param_or(params, 1, 0));
+		break;
+	case 1200: // can examine spot n be used? (HH2D.exe 0x4012e0)
+		if (!map.have_itm)
+			map_load_itm(0);
+		{
+			unsigned n = param_or(params, 1, 0);
+			mem_set_var16(18, memory_raw[0x6fe] && n >= 1 && n <= 0x30
+					&& map.itm[map_layout() * 0x30 + n - 1] != 0xff ? 1 : 0);
+		}
 		break;
 	case 82: { // (82, who, stage): "stage done" notice from mes_rank.gcc on surface 4 (HH2D.exe 0x421230)
 		unsigned who = param_or(params, 1, 0), stage = param_or(params, 2, 0);
