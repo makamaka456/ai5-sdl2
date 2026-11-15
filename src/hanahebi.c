@@ -152,6 +152,7 @@ static void msgwin_show(void);
 static void msgwin_hide(void);
 static void util_save_screen(unsigned mode);
 static void util_system_menu(void);
+static void util_scroll(struct param_list *params);
 static void util_room(struct param_list *params);
 static void util_ending_mode(unsigned last_tab);
 static void util_scene_mode(unsigned last_tab);
@@ -921,6 +922,9 @@ static void hanahebi_util(struct param_list *params)
 	case 64:
 		util_room(params);
 		break;
+	case 60:
+		util_scroll(params);
+		break;
 	case 6: case 10: // system menu closed / redraw menu bar
 	case 1005: case 1006: // map: pause/resume (TODO)
 		break;
@@ -1686,6 +1690,60 @@ static void hanahebi_present(struct param_list *params)
  * this by turning transparent pixels into the mask color (sysvar32[9]), which
  * copy_masked and the button overlay treat as transparent.
  */
+/*
+ * Util 60: scroll over an image larger than the screen (panoramas), which
+ * HH2D.exe keeps in surface 1. Our surfaces are 640x480, so the last large
+ * image loaded is kept here.
+ *   (60, 0, x0, y, x1, _): horizontal from x0 to x1
+ *   (60, 1, x, y0, _, y1): vertical from y0 to y1
+ */
+static SDL_Surface *pano;
+
+static void pano_keep(struct cg *cg)
+{
+	if (pano)
+		SDL_FreeSurface(pano);
+	pano = NULL;
+	if (cg->palette || cg->metrics.bpp == 8)
+		return;
+	SDL_Surface *tmp = SDL_CreateRGBSurfaceWithFormatFrom(cg->pixels, cg->metrics.w,
+			cg->metrics.h, 32, cg->metrics.w * 4, SDL_PIXELFORMAT_RGBA32);
+	pano = SDL_ConvertSurface(tmp, gfx_get_surface(0)->format, 0);
+	SDL_FreeSurface(tmp);
+}
+
+static void pano_show(int x, int y)
+{
+	SDL_Rect src = { x, y, 640, 480 };
+	SDL_CALL(SDL_BlitSurface, pano, &src, gfx_get_surface(0), NULL);
+	gfx_dirty(0, 0, 0, 640, 480);
+}
+
+static void util_scroll(struct param_list *params)
+{
+	if (!pano)
+		return;
+	bool vertical = param_or(params, 1, 0) == 1;
+	int x0 = (int32_t)param_or(params, 2, 0), y0 = (int32_t)param_or(params, 3, 0);
+	int x1 = (int32_t)param_or(params, 4, 0), y1 = (int32_t)param_or(params, 5, 0);
+	const char *v = config_ini_get("DispEffect", "Play");
+	int play = v ? atoi(v) : 1;
+	int step = play == 0 ? 1 : play == 1 ? 2 : 4;
+	int from = vertical ? y0 : x0, to = vertical ? y1 : x1;
+	vm_timer_t timer = vm_timer_create();
+	for (int p = from; p != to && !input_down(INPUT_CTRL); ) {
+		pano_show(vertical ? x0 : p, vertical ? p : y0);
+		vm_peek();
+		vm_timer_tick(&timer, 15);
+		if (abs(to - p) <= step)
+			p = to;
+		else
+			p += to > p ? step : -step;
+	}
+	pano_show(vertical ? x0 : to, vertical ? to : y0);
+	gfx_copy(0, 0, 640, 480, 0, 0, 0, BACK_SURFACE);
+}
+
 static void hanahebi_load_image(struct param_list *params)
 {
 	const char *name = name_param(params, 0, 3);
@@ -1701,6 +1759,8 @@ static void hanahebi_load_image(struct param_list *params)
 		cg->metrics.y = param_or(params, 2, cg->metrics.y);
 	}
 	unsigned dst = mem_get_sysvar16(mes_sysvar16_dst_surface);
+	if (cg->metrics.w > 640 || cg->metrics.h > 480)
+		pano_keep(cg);
 	if (cg->metrics.bpp == 32) {
 		uint32_t mask = mem_get_sysvar32(mes_sysvar32_mask_color);
 		uint8_t *a = alpha_get(dst);
