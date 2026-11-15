@@ -2873,7 +2873,10 @@ static void hanahebi_savedata(struct param_list *params)
  * by id. A snapshot is taken at each save point and that is what gets saved.
  */
 #define REC_SIZE 46
-#define MAX_RECS 30
+// HH2D.exe keeps an unbounded list (std::vector); the save files have room for
+// 30 records but are written with the actual count
+#define MAX_RECS 512
+#define FILE_RECS 30
 struct screen_record { uint16_t id; char name[32]; uint16_t p[6]; };
 static struct screen_record recs[MAX_RECS], recs_snap[MAX_RECS];
 static unsigned nr_recs = 0, nr_recs_snap = 0;
@@ -2908,13 +2911,7 @@ static bool rec_id_name_is(struct screen_record *r, void *d)
 static void recs_add(struct screen_record *r)
 {
 	if (nr_recs >= MAX_RECS) {
-		static bool dumped = false;
-		WARNING("hanahebi: too many screen records (adding %u \"%s\" %u %u)", r->id, r->name, r->p[0], r->p[1]);
-		if (!dumped) {
-			dumped = true;
-			for (unsigned i = 0; i < nr_recs; i++)
-				NOTICE("  rec %u: id %u \"%s\" %u %u %u", i, recs[i].id, recs[i].name, recs[i].p[0], recs[i].p[1], recs[i].p[2]);
-		}
+		WARNING("hanahebi: too many screen records");
 		return;
 	}
 	// insert after records with the same or lower id (stable)
@@ -2929,7 +2926,7 @@ static void recs_add(struct screen_record *r)
 
 static void recs_write(unsigned no)
 {
-	uint8_t buf[4 + MAX_RECS * REC_SIZE];
+	static uint8_t buf[4 + MAX_RECS * REC_SIZE];
 	memset(buf, 0, sizeof(buf));
 	le_put32(buf, 0, nr_recs_snap);
 	for (unsigned i = 0; i < nr_recs_snap; i++) {
@@ -2944,21 +2941,25 @@ static void recs_write(unsigned no)
 		WARNING("hanahebi: cannot write screen records %u", no);
 		return;
 	}
-	fwrite(buf, sizeof(buf), 1, f);
+	fwrite(buf, 4 + max(nr_recs_snap, FILE_RECS) * REC_SIZE, 1, f);
 	fclose(f);
 }
 
 static void recs_read(unsigned no)
 {
-	uint8_t buf[4 + MAX_RECS * REC_SIZE];
+	static uint8_t buf[4 + MAX_RECS * REC_SIZE];
 	memset(buf, 0, sizeof(buf));
 	FILE *f = file_open_utf8(save_path("SaveData%03u.dat", no), "rb");
+	size_t got = 0;
 	if (f) {
-		if (fread(buf, 1, sizeof(buf), f) < 4)
+		got = fread(buf, 1, sizeof(buf), f);
+		if (got < 4)
 			memset(buf, 0, 4);
 		fclose(f);
 	}
 	nr_recs = min(le_get32(buf, 0), MAX_RECS);
+	if (got >= 4 && nr_recs > (got - 4) / REC_SIZE)
+		nr_recs = (got - 4) / REC_SIZE;
 	for (unsigned i = 0; i < nr_recs; i++) {
 		uint8_t *b = buf + 4 + i * REC_SIZE;
 		recs[i].id = le_get16(b, 0);
