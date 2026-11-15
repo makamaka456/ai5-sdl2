@@ -1735,10 +1735,35 @@ static void hanahebi_util(struct param_list *params)
 			unsigned ch = memory_raw[0x391];
 			memcpy(memory_raw + 0x2568, ch == 3 ? deck3 : ch == 4 ? deck4 : deck, 10);
 			memory_raw[0x2572] = 10;
+		} else if (param_or(params, 1, 0) == 1) {
+			// draw a random card: var16[8] = card (0 when empty)
+			unsigned n = min(memory_raw[0x2572], 10);
+			if (!n) {
+				mem_set_var16(8, 0);
+				break;
+			}
+			unsigned i = rand() % n;
+			mem_set_var16(8, memory_raw[0x2568 + i]);
+			memmove(memory_raw + 0x2568 + i, memory_raw + 0x2568 + i + 1, n - i - 1);
+			memory_raw[0x2568 + n - 1] = 0;
+			memory_raw[0x2572] = n - 1;
+		}
+		// (80, 2): the original rebuilds its list from 0x2568; ours lives there
+		break;
+	case 81: { // var16[8] = 0/1/2 with chance var4[2098] (byte 0x8b2) (HH2D.exe 0x423543)
+		unsigned v = memory_raw[0x8b2], ch = memory_raw[0x391];
+		unsigned r;
+		if (ch == 4 || ch == 5) {
+			r = rand() % (ch == 4 ? 60 : 30);
+			mem_set_var16(8, r < v ? 1 : 0);
+		} else if (rand() % 60 < (int)v) {
+			mem_set_var16(8, 2);
 		} else {
-			log_unimplemented("Util", 80, params);
+			r = rand() % 30;
+			mem_set_var16(8, r < v ? 1 : 0);
 		}
 		break;
+	}
 	case 1007: case 1008:
 	case 1010: case 1011: case 1012: case 1013: case 1014: case 1015:
 	case 1017: case 1018:
