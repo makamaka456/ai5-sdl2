@@ -161,6 +161,7 @@ static void msgwin_compose(void);
 static bool msgwin_visible;
 static int msgwin_icon_state;
 static void apply_volume(enum audio_channel ch, const char *section);
+static bool setting_enabled(const char *section, const char *key);
 static void util_scroll(struct param_list *params);
 static void util_room(struct param_list *params);
 static void util_ending_mode(unsigned last_tab);
@@ -1111,7 +1112,110 @@ static void map_footstep(void)
 {
 	static unsigned n = 0;
 	static const char *steps[] = { "hh_179.wav", "hh_180.wav", "hh_181.wav" };
-	audio_se_play(steps[n++ % 3], 2);
+	if (!setting_enabled("Se", "IsSe"))
+		return;
+	audio_se_play(steps[n++ % 3], 1);
+	apply_volume(AUDIO_CH_SE(1), "Effect");
+}
+
+/*
+ * Ambient sounds on the map (HH2D.exe 0x402b10, Util 1036/1037/1039):
+ * (1036, wav, itm) adds a sound with a volume table by point (0xff = not
+ * heard, else the volume is (Volume - 9 - v) * 300 / 100 dB); the first
+ * sound heard at the current point loops on SE channel 2.
+ * (1037, wav) removes it, (1039, wav) mutes it, Util 1004 stops the sound.
+ */
+#define MAP_MAX_AMBIENT 8
+static struct { char name[32]; uint8_t vol[MAP_MAX_NODES]; bool enabled; } map_amb[MAP_MAX_AMBIENT];
+static unsigned map_nr_amb = 0;
+static int map_amb_playing = -1;
+
+static void map_ambient_stop(void)
+{
+	if (map_amb_playing >= 0)
+		audio_se_stop(2);
+	map_amb_playing = -1;
+}
+
+static void map_ambient_update(void)
+{
+	if (map.floor != 0) {
+		map_ambient_stop();
+		return;
+	}
+	for (unsigned i = 0; i < map_nr_amb; i++) {
+		uint8_t v = map_amb[i].vol[map.node % MAP_MAX_NODES];
+		if (!map_amb[i].enabled || v == 0xff)
+			continue;
+		if (!setting_enabled("Se", "IsSe"))
+			break;
+		const char *iv = config_ini_get("Effect", "Volume");
+		int vol = ((iv ? atoi(iv) : 9) - 9 - (int)v) * 300;
+		if (map_amb_playing != (int)i) {
+			audio_se_play(map_amb[i].name, 2);
+			map_amb_playing = i;
+		}
+		audio_set_volume(AUDIO_CH_SE(2), max(vol, AUDIO_VOLUME_MIN));
+		return;
+	}
+	map_ambient_stop();
+}
+
+static int map_ambient_find(const char *name)
+{
+	for (unsigned i = 0; i < map_nr_amb; i++) {
+		if (!strcasecmp(map_amb[i].name, name))
+			return i;
+	}
+	return -1;
+}
+
+static void map_ambient_command(unsigned no, struct param_list *params)
+{
+	if (params->nr_params < 2 || params->params[1].type != MES_PARAM_STRING)
+		return;
+	const char *name = params->params[1].str;
+	int i = map_ambient_find(name);
+	switch (no) {
+	case 1036: {
+		if (i < 0) {
+			if (map_nr_amb >= MAP_MAX_AMBIENT)
+				return;
+			i = map_nr_amb++;
+		}
+		snprintf(map_amb[i].name, sizeof(map_amb[i].name), "%.31s", name);
+		memset(map_amb[i].vol, 0xff, sizeof(map_amb[i].vol));
+		if (params->nr_params > 2 && params->params[2].type == MES_PARAM_STRING) {
+			struct archive_data *f = asset_data_load(params->params[2].str);
+			if (f) {
+				memcpy(map_amb[i].vol, f->data, min(f->size, sizeof(map_amb[i].vol)));
+				archive_data_release(f);
+			}
+		}
+		map_amb[i].enabled = true;
+		break;
+	}
+	case 1037:
+		if (i < 0)
+			return;
+		if (map_amb_playing == i)
+			map_ambient_stop();
+		else if (map_amb_playing > i)
+			map_amb_playing--;
+		memory_raw[0x9e0 + i] = 0;
+		map_amb[i] = map_amb[--map_nr_amb];
+		if (map_amb_playing == (int)map_nr_amb)
+			map_amb_playing = i;
+		return;
+	case 1039:
+		if (i < 0)
+			return;
+		if (map_amb_playing == i)
+			map_ambient_stop();
+		map_amb[i].enabled = false;
+		memory_raw[0x9e0 + i] = 1;
+		return;
+	}
 }
 
 static bool map_turn(int delta)
@@ -1145,6 +1249,7 @@ static int map_step(bool back, int *room)
 		return 0;
 	map.node = next;
 	map_footstep();
+	map_ambient_update();
 	map_show(map.dir * 2);
 	gfx_screen_dirty();
 	return 1;
@@ -1278,6 +1383,9 @@ static void util_map_select(void)
 		map_load_itm(0);
 	// debugging (automatic play): HH_DEBUG_MAP_RANDOM=1 picks a random room
 	if (getenv("HH_DEBUG_MAP_RANDOM")) {
+		map_load_graph(map.floor);
+		map_show(map.dir * 2);
+		gfx_screen_dirty();
 		int r = rand() % (ARRAY_SIZE(map_rooms) + 2);
 		int room = r < (int)ARRAY_SIZE(map_rooms) ? (int)map_rooms[r].id
 			: map_nr_people ? (int)map_people[rand() % map_nr_people].id : 1;
@@ -1293,6 +1401,7 @@ static void util_map_select(void)
 	}
 	map_show(map.dir * 2);
 	gfx_screen_dirty();
+	map_ambient_update();
 
 	int result = -1, hover = MW_NONE, last = -2;
 	input_wait_until_up(INPUT_ACTIVATE);
@@ -1393,6 +1502,12 @@ static void util_map_command(unsigned no, struct param_list *params)
 	int room;
 	unsigned n = param_or(params, 1, 1);
 	switch (no) {
+	case 1007: // back on the 1st floor (from the basement stairs)
+		map.floor = 0; map.node = 58; map.dir = 0;
+		break;
+	case 1008: // into the basement
+		map.floor = 1; map.node = 0; map.dir = 2;
+		break;
 	case 1010: map.floor = 0; break;
 	case 1011: map.floor = 1; break;
 	case 1012:
@@ -1430,7 +1545,7 @@ static void util_map_command(unsigned no, struct param_list *params)
 
 static void hanahebi_util(struct param_list *params)
 {
-	if (getenv("HH_DEBUG_UTIL")) {
+	if (getenv("HH_DEBUG_UTIL") && vm_expr_param(params, 0) != 9000 && vm_expr_param(params, 0) != 504) {
 		string str = string_new("");
 		for (unsigned i = 0; i < params->nr_params; i++) {
 			if (params->params[i].type == MES_PARAM_STRING)
@@ -1593,9 +1708,23 @@ static void hanahebi_util(struct param_list *params)
 	case 1100: // map closed
 		map_nr_people = 0;
 		break;
+	case 1036: case 1037: case 1039:
+		map_ambient_command(vm_expr_param(params, 0), params);
+		break;
+	case 1004: // stop the map sounds
+		map_ambient_stop();
+		break;
+	case 1002: case 1003: // re-read the map state from the variables (we always do)
+		break;
 	case 1019: // examine spot items: (1019, n) 3 = chapter 4 table
 		map_load_itm(param_or(params, 1, 0));
 		break;
+	case 1021: // HH2D.exe: clears byte 0x706
+		memory_raw[0x706] = 0;
+		break;
+	case 1009: case 1020: case 1024: case 1025: // no-ops in HH2D.exe
+		break;
+	case 1007: case 1008:
 	case 1010: case 1011: case 1012: case 1013: case 1014: case 1015:
 	case 1017: case 1018:
 		util_map_command(vm_expr_param(params, 0), params);
@@ -2779,7 +2908,13 @@ static bool rec_id_name_is(struct screen_record *r, void *d)
 static void recs_add(struct screen_record *r)
 {
 	if (nr_recs >= MAX_RECS) {
-		WARNING("hanahebi: too many screen records");
+		static bool dumped = false;
+		WARNING("hanahebi: too many screen records (adding %u \"%s\" %u %u)", r->id, r->name, r->p[0], r->p[1]);
+		if (!dumped) {
+			dumped = true;
+			for (unsigned i = 0; i < nr_recs; i++)
+				NOTICE("  rec %u: id %u \"%s\" %u %u %u", i, recs[i].id, recs[i].name, recs[i].p[0], recs[i].p[1], recs[i].p[2]);
+		}
 		return;
 	}
 	// insert after records with the same or lower id (stable)
@@ -2874,9 +3009,12 @@ static void hanahebi_screen_records(struct param_list *params)
 			mem_set_var16(18, recs[i].p[k]);
 		break;
 	}
-	case 8:
+	case 8: // (8, id, "", p0): the scripts always pass an empty name
 		key[0] = param_or(params, 1, 0);
-		key[1] = param_or(params, 2, 0);
+		if (params->nr_params > 2 && params->params[2].type == MES_PARAM_STRING)
+			key[1] = param_or(params, 3, 0);
+		else
+			key[1] = param_or(params, 2, 0);
 		recs_remove_if(rec_id_p0_is, key);
 		break;
 	case 9:
