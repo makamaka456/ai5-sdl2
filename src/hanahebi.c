@@ -152,6 +152,9 @@ static void msgwin_show(void);
 static void msgwin_hide(void);
 static void util_save_screen(unsigned mode);
 static void util_system_menu(void);
+static void util_backlog_view(void);
+static void bl_add_text(const char *text);
+static void work_text(int x, int y, const char *text);
 
 #define SYS_STUB(n) \
 	static void sys_stub_##n(struct param_list *params) \
@@ -837,6 +840,9 @@ static void hanahebi_util(struct param_list *params)
 	case 12:
 		util_save_screen(param_or(params, 1, 2));
 		break;
+	case 24:
+		util_backlog_view();
+		break;
 	case 502: msgwin_show(); break;
 	case 503: msgwin_hide(); break;
 	default:
@@ -1024,6 +1030,7 @@ static void hanahebi_draw_text(const char *text)
 			mem_get_sysvar16(mes_sysvar16_text_end_x), mem_get_sysvar16(mes_sysvar16_text_end_y),
 			mem_get_sysvar16(mes_sysvar16_char_space), mem_get_sysvar16(mes_sysvar16_line_space),
 			mem_get_sysvar16(mes_sysvar16_font_height));
+	bl_add_text(text);
 	vm_draw_text(text, 1);
 	if (msgwin_visible && mem_get_sysvar16(mes_sysvar16_dst_surface) == MSGWIN_SURFACE)
 		msgwin_compose();
@@ -1046,9 +1053,223 @@ static void hanahebi_wait(struct param_list *params)
 
 // System.function[19]: message history (backlog). Not implemented yet;
 // pretend the log is empty.
+/*
+ * System.function[19]: backlog. Entries are recorded between (1) and (2)
+ * while System.flags & 0x10 is set (0x20 = recording). Text is kept in
+ * memory.backlog as 0x01 + UTF-8 text, so (4, n) can return its address for
+ * System.function[20].
+ *   0 clear, 1 begin, 2 end, 3 -> var32[18] = count, 4 n -> var32[18] = address,
+ *   5 n -> var16[18] = voice
+ * Util 24 shows the backlog.
+ */
+#define BL_ENTRIES MEMORY_BACKLOG_NR_ENTRIES
+#define BL_SIZE MEMORY_BACKLOG_DATA_SIZE
+static unsigned bl_count = 0;
+static unsigned bl_len = 0;
+static char bl_voice[BL_ENTRIES][32];
+
+static uint8_t *bl_entry(unsigned i)
+{
+	return memory.backlog + i * BL_SIZE;
+}
+
+static bool bl_recording(void)
+{
+	uint16_t f = mem_get_sysvar16(mes_sysvar16_flags);
+	return (f & 0x10) && (f & 0x20);
+}
+
+static void bl_add_text(const char *text)
+{
+	if (!bl_recording() || bl_count >= BL_ENTRIES)
+		return;
+	uint8_t *e = bl_entry(bl_count);
+	string utf8 = ai5_cstring_to_utf8(text, 0);
+	text = utf8;
+	size_t n = strlen(text);
+	if (1 + bl_len + n + 1 > BL_SIZE)
+		n = BL_SIZE - 2 - bl_len;
+	memcpy(e + 1 + bl_len, text, n);
+	bl_len += n;
+	e[1 + bl_len] = '\0';
+	string_free(utf8);
+}
+
+static void bl_set_voice(const char *name)
+{
+	if (bl_recording() && bl_count < BL_ENTRIES)
+		snprintf(bl_voice[bl_count], sizeof(bl_voice[0]), "%s", name);
+}
+
 static void hanahebi_backlog(struct param_list *params)
 {
-	set_result(0);
+	uint16_t flags = mem_get_sysvar16(mes_sysvar16_flags);
+	unsigned n = param_or(params, 1, 0);
+	switch (param_or(params, 0, 0)) {
+	case 0:
+		if (!(flags & 0x10))
+			break;
+		bl_count = 0;
+		bl_len = 0;
+		break;
+	case 1:
+		if (!(flags & 0x10) || (flags & 0x20))
+			break;
+		mem_set_sysvar16(mes_sysvar16_flags, flags | 0x20);
+		if (bl_count == BL_ENTRIES) {
+			memmove(bl_entry(0), bl_entry(1), (BL_ENTRIES - 1) * BL_SIZE);
+			memmove(bl_voice[0], bl_voice[1], (BL_ENTRIES - 1) * sizeof(bl_voice[0]));
+			bl_count--;
+		}
+		memset(bl_entry(bl_count), 0, BL_SIZE);
+		bl_entry(bl_count)[0] = 0x01;
+		bl_voice[bl_count][0] = '\0';
+		bl_len = 0;
+		break;
+	case 2:
+		if (!(flags & 0x10) || !(flags & 0x20))
+			break;
+		mem_set_sysvar16(mes_sysvar16_flags, flags & ~0x20);
+		if (bl_count < BL_ENTRIES)
+			bl_count++;
+		break;
+	case 3:
+		set_result(bl_count);
+		break;
+	case 4:
+		set_result(n < bl_count ? (uint32_t)(bl_entry(n) - memory_raw) : 0);
+		break;
+	case 5:
+		mem_set_var16(18, 0);
+		break;
+	default:
+		log_unimplemented("System.function", 19, params);
+	}
+}
+
+// Util 24: backlog viewer
+struct bl_line { const char *start; unsigned len; int entry; };
+
+static unsigned bl_wrap(struct bl_line *lines, unsigned max_lines, int width)
+{
+	unsigned nr = 0;
+	for (unsigned e = 0; e < bl_count && nr < max_lines; e++) {
+		const char *p = (const char*)bl_entry(e) + 1;
+		// skip leading spaces
+		while (*p == ' ')
+			p++;
+		while (*p && nr < max_lines) {
+			const char *start = p;
+			int w = 0;
+			while (*p) {
+				int ch;
+				const char *next = utf8_next(p, &ch);
+				char buf[8];
+				memcpy(buf, p, next - p);
+				buf[next - p] = '\0';
+				int cw = text_width(buf);
+				if (w + cw > width)
+					break;
+				w += cw;
+				p = next;
+			}
+			if (p == start) {
+				int ch;
+				p = utf8_next(p, &ch);
+			}
+			lines[nr++] = (struct bl_line) { start, p - start, e };
+		}
+		if (nr < max_lines)
+			lines[nr++] = (struct bl_line) { NULL, 0, -1 };
+	}
+	return nr;
+}
+
+#define BL_LINE_H 26
+#define BL_ROWS 16
+static void bl_draw(struct bl_line *lines, unsigned nr, int top, int hover_entry)
+{
+	SDL_Surface *ov = gfx_get_overlay(2);
+	SDL_CALL(SDL_FillRect, ov, NULL, SDL_MapRGBA(ov->format, 0, 0, 0, 215));
+	gfx_fill(0, 0, 640, 480, WORK_SURFACE, 0);
+	gfx_text_set_colors(0, 0xffffff);
+	for (int r = 0; r < BL_ROWS; r++) {
+		int i = top + r;
+		if (i < 0 || i >= (int)nr || !lines[i].start)
+			continue;
+		if (lines[i].entry == hover_entry && bl_voice[hover_entry][0]) {
+			SDL_Rect hl = { 16, 20 + r * BL_LINE_H - 2, 608, BL_LINE_H };
+			SDL_CALL(SDL_FillRect, ov, &hl, SDL_MapRGBA(ov->format, 120, 30, 30, 220));
+		}
+		char buf[BL_SIZE];
+		memcpy(buf, lines[i].start, lines[i].len);
+		buf[lines[i].len] = '\0';
+		work_text(30, 20 + r * BL_LINE_H, buf);
+	}
+	gfx_text_set_size(16, 0);
+	work_text(24, 452, "휠/↑↓: 넘기기   음성 있는 대사 클릭: 다시 듣기   오른쪽 클릭: 닫기");
+	gfx_text_set_size(20, 0);
+	SDL_Surface *ts = gfx_get_surface(WORK_SURFACE);
+	SDL_CALL(SDL_SetColorKey, ts, SDL_TRUE, SDL_MapRGB(ts->format, 0, 0, 0));
+	SDL_CALL(SDL_BlitSurface, ts, NULL, ov, NULL);
+	SDL_CALL(SDL_SetColorKey, ts, SDL_FALSE, 0);
+	gfx_overlay_enable(2);
+	gfx_screen_dirty();
+}
+
+static void util_backlog_view(void)
+{
+	if (!bl_count)
+		return;
+	gfx_text_set_size(20, 0);
+	static struct bl_line lines[BL_ENTRIES * 12];
+	unsigned nr = bl_wrap(lines, ARRAY_SIZE(lines), 580);
+	int top = max(0, (int)nr - BL_ROWS), last_top = -1, last_hover = -2;
+	input_wait_until_up(INPUT_CANCEL);
+	input_wait_until_up(INPUT_ACTIVATE);
+	while (true) {
+		unsigned cx, cy;
+		cursor_get_pos(&cx, &cy);
+		int row = ((int)cy - 18) / BL_LINE_H;
+		int li = top + row;
+		int hover = (row >= 0 && row < BL_ROWS && li < (int)nr) ? lines[li].entry : -1;
+		if (top != last_top || hover != last_hover) {
+			bl_draw(lines, nr, top, hover);
+			last_top = top;
+			last_hover = hover;
+		}
+		if (input_down(INPUT_CANCEL)) {
+			input_wait_until_up(INPUT_CANCEL);
+			break;
+		}
+		enum cursor_direction dir = cursor_get_direction();
+		cursor_set_direction(CURSOR_DIR_NONE);
+		bool wheel = dir == CURSOR_DIR_UP || dir == CURSOR_DIR_DOWN;
+		int wheel_y = dir == CURSOR_DIR_UP ? 1 : -1;
+		if (input_down(INPUT_UP) || (wheel && wheel_y > 0)) {
+			top = max(0, top - (wheel ? 3 : 1));
+			if (!wheel)
+				input_wait_until_up(INPUT_UP);
+		} else if (input_down(INPUT_DOWN) || (wheel && wheel_y < 0)) {
+			if (top >= (int)nr - BL_ROWS)
+				break; // scrolled past the end: close
+			top = min((int)nr - BL_ROWS, top + (wheel ? 3 : 1));
+			if (!wheel)
+				input_wait_until_up(INPUT_DOWN);
+		}
+		if (input_down(INPUT_ACTIVATE)) {
+			input_wait_until_up(INPUT_ACTIVATE);
+			if (hover >= 0 && bl_voice[hover][0]) {
+				audio_voice_stop(0);
+				audio_voice_play(bl_voice[hover], 0);
+			}
+		}
+		vm_peek();
+		vm_delay(16);
+	}
+	audio_voice_stop(0);
+	gfx_overlay_disable(2);
+	gfx_screen_dirty();
 }
 
 /*
@@ -1096,10 +1317,13 @@ static void hanahebi_cursor(struct param_list *params)
 		break;
 	}
 	case 3: cursor_set_pos(param_or(params, 1, 0), param_or(params, 2, 0)); break;
-	case 5: // mouse wheel: var16[18] = direction, var16[25] = moved
-		mem_set_var16(18, 0);
-		mem_set_var16(25, 0);
+	case 5: { // mouse wheel: var16[18] = 1 if down, var16[25] = moved
+		enum cursor_direction dir = cursor_get_direction();
+		cursor_set_direction(CURSOR_DIR_NONE);
+		mem_set_var16(18, dir == CURSOR_DIR_DOWN);
+		mem_set_var16(25, dir == CURSOR_DIR_UP || dir == CURSOR_DIR_DOWN);
 		break;
+	}
 	default:
 		log_unimplemented("System.function", 2, params);
 	}
@@ -1289,6 +1513,7 @@ static void hanahebi_voice(struct param_list *params)
 {
 	switch (vm_expr_param(params, 0)) {
 	case 0:
+		bl_set_voice(vm_string_param(params, 1));
 		if (setting_enabled("Voice", "IsVoice"))
 			audio_voice_play(vm_string_param(params, 1), 0);
 		break;
@@ -1302,6 +1527,7 @@ static void hanahebi_voice(struct param_list *params)
 		break;
 	case 3:
 		if (voice_pending) {
+			bl_set_voice(voice_queued);
 			audio_voice_stop(0);
 			if (setting_enabled("Voice", "IsVoice"))
 				audio_voice_play(voice_queued, 0);
