@@ -1244,6 +1244,24 @@ static unsigned map_spot_at(unsigned x, unsigned y)
 	return v;
 }
 
+// is there an examine spot in the current view? (the magnifier on the panel)
+static bool map_any_spot(void)
+{
+	const uint8_t *a = map_spots();
+	if (!a || !map.have_itm || (!memory_raw[0x6fe] && !getenv("HH_DEBUG_SPOTS")))
+		return false;
+	bool seen[0x31] = {0};
+	for (unsigned i = 0; i < 640 * 480; i += 7) {
+		unsigned v = a[i];
+		if (v == 0 || v > 0x30 || seen[v])
+			continue;
+		seen[v] = true;
+		if (map.itm[map_layout() * 0x30 + v - 1] != 0xff)
+			return true;
+	}
+	return false;
+}
+
 static unsigned map_examine(unsigned v)
 {
 	unsigned idx = v - 1;
@@ -1577,6 +1595,11 @@ static void map_draw_plan(SDL_Surface *ov)
 		SDL_BlitSurface(tmp, &src, map_plan, NULL);
 		SDL_FreeSurface(tmp);
 		cg_free(cg);
+		// erase the Japanese floor labels (一階, 地下) and the arrow icon;
+		// we write the floor name in Korean instead
+		static const SDL_Rect erase[] = { { 100, 150, 44, 28 }, { 200, 150, 46, 28 }, { 0, 164, 26, 20 } };
+		for (unsigned i = 0; i < ARRAY_SIZE(erase); i++)
+			SDL_FillRect(map_plan, &erase[i], SDL_MapRGBA(map_plan->format, 0, 0, 0, 0));
 		SDL_SetSurfaceBlendMode(map_plan, SDL_BLENDMODE_BLEND);
 		SDL_SetSurfaceAlphaMod(map_plan, 220);
 	}
@@ -1589,7 +1612,24 @@ static void map_draw_plan(SDL_Surface *ov)
 	SDL_Rect dst = { 640 - src.w - 6, 6, src.w, src.h };
 	SDL_Rect bg = { dst.x - 2, dst.y - 2, dst.w + 4, dst.h + 4 };
 	SDL_CALL(SDL_FillRect, ov, &bg, SDL_MapRGBA(ov->format, 0, 0, 0, 150));
-	SDL_BlitSurface(map_plan, &src, ov, &dst);
+	if (map.floor) {
+		SDL_BlitSurface(map_plan, &src, ov, &dst);
+	} else {
+		// the 1st floor plan's lower right corner holds part of the
+		// basement plan: leave that part out
+		SDL_Rect top = { src.x, src.y, src.w, 110 - src.y };
+		SDL_Rect dtop = { dst.x, dst.y, top.w, top.h };
+		SDL_BlitSurface(map_plan, &top, ov, &dtop);
+		SDL_Rect bot = { src.x, 110, 146, src.y + src.h - 110 };
+		SDL_Rect dbot = { dst.x, dst.y + top.h, bot.w, bot.h };
+		SDL_BlitSurface(map_plan, &bot, ov, &dbot);
+	}
+	{
+		const char *label = map.floor ? "지하" : "1층";
+		gfx_text_set_size(16, 0);
+		work_text(dst.x + dst.w - (int)text_width(label) - 4, dst.y + dst.h - 20, label);
+		gfx_text_set_size(18, 0);
+	}
 	if (!map_pts[map.floor].have[map.node])
 		return;
 	int cx = dst.x + (int)(ax * map_pts[map.floor].x[map.node] + bx) - src.x;
@@ -1606,16 +1646,58 @@ static void map_draw_plan(SDL_Surface *ov)
 	SDL_CALL(SDL_FillRect, ov, &dot, yellow);
 }
 
-// on-screen controls (overlay 2)
-enum { MW_NONE = -1, MW_FWD, MW_BACK, MW_LEFT, MW_RIGHT, MW_LIST, MW_PERSON, MW_NR };
-static const SDL_Rect mw_rects[MW_NR] = {
-	[MW_FWD]    = { 532, 326, 52, 46 },
-	[MW_BACK]   = { 532, 426, 52, 46 },
-	[MW_LEFT]   = { 476, 376, 52, 46 },
-	[MW_RIGHT]  = { 588, 376, 48, 46 },
-	[MW_LIST]   = { 8, 430, 120, 42 },
-	[MW_PERSON] = { 220, 400, 200, 46 },
+// on-screen controls (overlay 2): the original's move panel from mappt.gcc
+// (HH2D.exe 0x43d6c0): 160x84 at AI5WIN.INI [Ctrl] X/Y (default 248, 368).
+// Each piece has 3 pictures (normal, hover, pressed).
+enum { MW_NONE = -1, MW_FWD, MW_LEFT, MW_RIGHT, MW_LIST, MW_BACK, MW_PERSON, MW_NR };
+static const struct { int x, y, w, h, sx, sy, step; } mw_pieces[MW_PERSON] = {
+	[MW_FWD]   = { 0x2c, 0x00, 0x38, 0x1c, 0x180, 0x104, 0x1c },
+	[MW_LEFT]  = { 0x00, 0x04, 0x2c, 0x44, 0x154, 0x038, 0x44 },
+	[MW_RIGHT] = { 0x64, 0x04, 0x2c, 0x44, 0x154, 0x104, 0x44 },
+	[MW_LIST]  = { 0x24, 0x14, 0x48, 0x20, 0x180, 0x0a4, 0x20 },
+	[MW_BACK]  = { 0x24, 0x28, 0x48, 0x24, 0x180, 0x038, 0x24 },
 };
+static SDL_Surface *map_pt; // all of mappt.gcc
+static int mw_pressed = MW_NONE;
+
+static void mw_origin(int *x, int *y)
+{
+	const char *cx = config_ini_get("Ctrl", "X"), *cy = config_ini_get("Ctrl", "Y");
+	*x = cx ? atoi(cx) : 248;
+	*y = cy ? atoi(cy) : 368;
+	if (*x < 0 || *x > 640 - 160)
+		*x = 248;
+	if (*y < 0 || *y > 480 - 84)
+		*y = 368;
+}
+
+static SDL_Rect mw_rect(int id)
+{
+	if (id == MW_PERSON)
+		return (SDL_Rect) { 8, 430, 190, 42 };
+	int ox, oy;
+	mw_origin(&ox, &oy);
+	return (SDL_Rect) { ox + mw_pieces[id].x, oy + mw_pieces[id].y, mw_pieces[id].w, mw_pieces[id].h };
+}
+
+static bool map_pt_load(void)
+{
+	if (map_pt)
+		return true;
+	struct cg *cg = hh_cg_load("mappt.gcc");
+	if (!cg || cg->palette || cg->metrics.bpp == 8 || cg->metrics.w < 0x1f0 || cg->metrics.h < 0x200) {
+		if (cg)
+			cg_free(cg);
+		return false;
+	}
+	SDL_Surface *tmp = SDL_CreateRGBSurfaceWithFormatFrom(cg->pixels, cg->metrics.w,
+			cg->metrics.h, 32, cg->metrics.w * 4, SDL_PIXELFORMAT_RGBA32);
+	map_pt = SDL_ConvertSurfaceFormat(tmp, SDL_PIXELFORMAT_RGBA32, 0);
+	SDL_FreeSurface(tmp);
+	cg_free(cg);
+	SDL_SetSurfaceBlendMode(map_pt, SDL_BLENDMODE_BLEND);
+	return map_pt != NULL;
+}
 
 static int map_person_here(void)
 {
@@ -1628,11 +1710,36 @@ static int map_person_here(void)
 
 static void mw_button(SDL_Surface *ov, int id, int hover, const char *label)
 {
-	SDL_Rect b = mw_rects[id];
+	SDL_Rect b = mw_rect(id);
 	SDL_Rect in = { b.x + 2, b.y + 2, b.w - 4, b.h - 4 };
 	SDL_CALL(SDL_FillRect, ov, &b, SDL_MapRGBA(ov->format, hover == id ? 240 : 170, 40, 40, 230));
 	SDL_CALL(SDL_FillRect, ov, &in, SDL_MapRGBA(ov->format, hover == id ? 120 : 30, 10, 10, 200));
 	work_text(b.x + (b.w - (int)text_width(label)) / 2, b.y + (b.h - 20) / 2, label);
+}
+
+static void mw_draw_panel(SDL_Surface *ov, int hover, bool spots)
+{
+	if (!map_pt_load()) {
+		mw_button(ov, MW_FWD, hover, "▲");
+		mw_button(ov, MW_BACK, hover, "▼");
+		mw_button(ov, MW_LEFT, hover, "◀");
+		mw_button(ov, MW_RIGHT, hover, "▶");
+		mw_button(ov, MW_LIST, hover, "방");
+		return;
+	}
+	for (int id = MW_FWD; id < MW_PERSON; id++) {
+		int st = mw_pressed == id ? 2 : hover == id ? 1 : 0;
+		SDL_Rect src = { mw_pieces[id].sx, mw_pieces[id].sy + st * mw_pieces[id].step,
+			mw_pieces[id].w, mw_pieces[id].h };
+		SDL_Rect dst = mw_rect(id);
+		SDL_BlitSurface(map_pt, &src, ov, &dst);
+	}
+	// magnifier: yellow when something here can be examined
+	int ox, oy;
+	mw_origin(&ox, &oy);
+	SDL_Rect src = { 0x1d8, 0x68 + (spots ? 1 : 0) * 0x1c, 0x18, 0x1c };
+	SDL_Rect dst = { ox + 0x88, oy + 0x38, 0x18, 0x1c };
+	SDL_BlitSurface(map_pt, &src, ov, &dst);
 }
 
 #define MW_SPOT 1000
@@ -1664,11 +1771,8 @@ static void map_walk_draw(int hover)
 	const struct map_door *d = map_door_ahead();
 	bool fwd = d || map.next[map.floor][map.node][map.dir] >= 0;
 	bool back = map.next[map.floor][map.node][(map.dir + 2) & 3] >= 0;
-	mw_button(ov, MW_FWD, hover, fwd ? "▲" : "·");
-	mw_button(ov, MW_BACK, hover, back ? "▼" : "·");
-	mw_button(ov, MW_LEFT, hover, "◀");
-	mw_button(ov, MW_RIGHT, hover, "▶");
-	mw_button(ov, MW_LIST, hover, "방 목록");
+	(void)fwd; (void)back;
+	mw_draw_panel(ov, hover, map_any_spot());
 	map_draw_plan(ov);
 	if (map_person_here() >= 0)
 		mw_button(ov, MW_PERSON, hover, "누군가 있다");
@@ -1693,10 +1797,12 @@ static void map_walk_draw(int hover)
 
 static int map_walk_hit(unsigned x, unsigned y)
 {
-	for (int i = 0; i < MW_NR; i++) {
+	// later pieces are drawn on top: test them first
+	for (int i = MW_NR - 1; i >= 0; i--) {
 		if (i == MW_PERSON && map_person_here() < 0)
 			continue;
-		const SDL_Rect *r = &mw_rects[i];
+		SDL_Rect rr = mw_rect(i);
+		const SDL_Rect *r = &rr;
 		if ((int)x >= r->x && (int)x < r->x + r->w && (int)y >= r->y && (int)y < r->y + r->h)
 			return i;
 	}
@@ -1803,6 +1909,14 @@ static void util_map_select(void)
 			input_wait_until_up(INPUT_ACTIVATE);
 		}
 		int room = 0;
+		if (action >= MW_FWD && action < MW_PERSON) {
+			// show the pressed picture for a moment (as the original does)
+			mw_pressed = action;
+			map_walk_draw(action);
+			gfx_update();
+			vm_delay(80);
+			mw_pressed = MW_NONE;
+		}
 		switch (action) {
 		case MW_FWD:
 			if (map_step(false, &room) < 0)
