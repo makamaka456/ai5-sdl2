@@ -173,6 +173,7 @@ SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./build/ai5 <게임폴더>
 - APK는 GitHub Actions `Android` 워크플로(`.github/workflows/android.yaml`) 산출물 `ai5-launcher-apk` (작업 공간에서는 dl.google.com이 막혀 직접 빌드 불가)
 
 ## 다른 게임 지원 때 검토할 것 (꽃과뱀 마무리 후, 2026-11-15 사용자 요청)
+- **런처 공통 작업 인계 문서**: `docs/handoff-launcher-ko.md` (저장 위치 launcher-save/, 게임별 [설정] 버튼, 한글판·일본판 목록 합치기 — 2026-11-16 합의, 다른 방에서 진행)
 - 게임 파일: 비공개 저장소 릴리즈 `games-Doukyuusei_2`(동급생2), `Shusaku`(취작) 업로드됨
 - **유작(isaku98) 안드로이드 실행 오류** (사용자 폰 스크린샷): `src/isaku/item_window.c:51 item_window_create: SDL_CreateWindow: Android only supports one window`
   - 원인: 유작의 아이템 창을 PC에서는 별도 창으로 만드는데 안드로이드는 창을 하나만 허용
