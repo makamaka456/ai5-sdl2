@@ -441,7 +441,7 @@ public class LauncherActivity extends Activity {
             hasBg ? "배경화면 바꾸기 (4:3일 때 양옆)" : "배경화면 고르기 (4:3일 때 양옆)",
             hasBg ? "배경화면 없애기" : "배경화면 없애기  (지금 없음)",
             "가상 버튼: 표시할 버튼 고르기  (지금 " + shown + "개)",
-            "가상 버튼: 위치·크기·투명도 처음대로",
+            "가상 버튼: 위치·크기·투명도 편집 (가로 화면)",
             "키맵핑 (게임패드)",
             AppSettings.supportsOpenAll(id)
                     ? "회상·감상 처음부터 열기: " + (AppSettings.openAll(this, id) ? "켜짐" : "꺼짐") + "  (누르면 바꾸기)"
@@ -477,18 +477,13 @@ public class LauncherActivity extends Activity {
                         });
                         break;
                     }
-                    case 4:
-                        new AlertDialog.Builder(this)
-                                .setMessage("가상 버튼의 위치·크기·투명도·표시를 처음대로 되돌릴까요?\n"
-                                        + "(자세한 위치 조정은 게임 중 ⚙ → 가상 버튼에서 끌어서 합니다)")
-                                .setPositiveButton("되돌리기", (d2, w) -> {
-                                    for (String[] bd : AppSettings.VBUTTONS)
-                                        AppSettings.saveBtn(this, id, bd[0], AppSettings.defaultBtn(bd[0]));
-                                    gameSettings(game);
-                                })
-                                .setNegativeButton("취소", (d2, w) -> gameSettings(game))
-                                .show();
+                    case 4: {
+                        Intent e = new Intent(this, EditorActivity.class);
+                        e.putExtra(EditorActivity.EXTRA_GAME, id);
+                        e.putExtra(EditorActivity.EXTRA_NAME, GAMES[game][1]);
+                        startActivity(e);
                         break;
+                    }
                     case 5:
                         AppSettings.padSettings(this, id, null);
                         break;
