@@ -201,8 +201,6 @@ public class GameActivity extends SDLActivity {
         case "down":  return KeyEvent.KEYCODE_DPAD_DOWN;
         case "left":  return KeyEvent.KEYCODE_DPAD_LEFT;
         case "right": return KeyEvent.KEYCODE_DPAD_RIGHT;
-        case "pgup":  return KeyEvent.KEYCODE_PAGE_UP;
-        case "pgdn":  return KeyEvent.KEYCODE_PAGE_DOWN;
         }
         return 0;
     }

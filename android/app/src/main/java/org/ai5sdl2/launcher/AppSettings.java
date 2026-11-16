@@ -79,8 +79,6 @@ final class AppSettings {
         { "left",   "◀",         "left",  "0.75", "1", "0.06" },
         { "right",  "▶",         "left",  "0.75", "1", "0.20" },
         { "down",   "▼",         "left",  "0.88", "1", "0.13" },
-        { "pgup",   "PgUp",       "right", "0.08", "1", "0.62" },
-        { "pgdn",   "PgDn",       "right", "0.08", "1", "0.74" },
     };
     // longer names for lists
     static final String[][] VBUTTON_NAMES = {
@@ -88,7 +86,7 @@ final class AppSettings {
         { "enter", "결정 (Enter)" }, { "gear", "⚙ 설정" }, { "hide", "대사창 숨기기 (Space)" },
         { "log", "지난 대사 (Backspace)" }, { "shift", "화면 효과 빨리 (Shift)" },
         { "up", "방향키 위 ▲" }, { "left", "방향키 왼쪽 ◀" }, { "right", "방향키 오른쪽 ▶" },
-        { "down", "방향키 아래 ▼" }, { "pgup", "Page Up" }, { "pgdn", "Page Down" },
+        { "down", "방향키 아래 ▼" },
     };
 
     static String[] vbutton(String id) {
@@ -238,7 +236,7 @@ final class AppSettings {
     };
     // defaults (A decide, B menu, X skip, Y hide window, L1 backlog)
     static final String[] PAD_DEFAULTS = {
-        "ENTER", "ESCAPE", "CTRL", "SPACE", "BACKSPACE", "SHIFT", "PAGEUP", "PAGEDOWN",
+        "ENTER", "ESCAPE", "CTRL", "SPACE", "BACKSPACE", "SHIFT", "BACKSPACE", "SPACE",
         "NONE", "ESCAPE", "NONE", "NONE", "UP", "DOWN", "LEFT", "RIGHT",
     };
     static final String[][] PAD_ACTIONS = {
@@ -247,7 +245,7 @@ final class AppSettings {
         { "CTRL", "넘기기 (누르는 동안 Ctrl)" }, { "SPACE", "대사창 숨기기 (Space)" },
         { "BACKSPACE", "지난 대사 (Backspace)" }, { "SHIFT", "화면 효과 빨리 (Shift)" },
         { "UP", "위" }, { "DOWN", "아래" }, { "LEFT", "왼쪽" }, { "RIGHT", "오른쪽" },
-        { "PAGEUP", "Page Up" }, { "PAGEDOWN", "Page Down" }, { "NONE", "없음" },
+        { "NONE", "없음" },
     };
     static final String[][] STICK_MODES = {
         { "CURSOR", "마우스 커서 움직이기" }, { "DPAD", "방향키로 쓰기" }, { "DISABLED", "쓰지 않기" },
