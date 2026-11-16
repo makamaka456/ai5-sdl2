@@ -1201,9 +1201,21 @@ static int map_ambient_find(const char *name)
 
 static void map_ambient_command(unsigned no, struct param_list *params)
 {
-	if (params->nr_params < 2 || params->params[1].type != MES_PARAM_STRING)
+	// the name is a string, or (when a load replays the screen records) the
+	// address of "hh_036" without the extension
+	char wav[64], itm[64];
+	const char *n1 = name_param(params, 1, 1);
+	if (!n1[0])
 		return;
-	const char *name = params->params[1].str;
+	if (strchr(n1, '.')) {
+		snprintf(wav, sizeof(wav), "%.59s", n1);
+		snprintf(itm, sizeof(itm), "%.59s", params->nr_params > 2
+				&& params->params[2].type == MES_PARAM_STRING ? params->params[2].str : "");
+	} else {
+		snprintf(wav, sizeof(wav), "%.55s.wav", n1);
+		snprintf(itm, sizeof(itm), "%.55s.itm", n1);
+	}
+	const char *name = wav;
 	int i = map_ambient_find(name);
 	switch (no) {
 	case 1036: {
@@ -1214,8 +1226,8 @@ static void map_ambient_command(unsigned no, struct param_list *params)
 		}
 		snprintf(map_amb[i].name, sizeof(map_amb[i].name), "%.31s", name);
 		memset(map_amb[i].vol, 0xff, sizeof(map_amb[i].vol));
-		if (params->nr_params > 2 && params->params[2].type == MES_PARAM_STRING) {
-			struct archive_data *f = asset_data_load(params->params[2].str);
+		if (itm[0]) {
+			struct archive_data *f = asset_data_load(itm);
 			if (f) {
 				memcpy(map_amb[i].vol, f->data, min(f->size, sizeof(map_amb[i].vol)));
 				archive_data_release(f);
@@ -2511,6 +2523,18 @@ static void hanahebi_util(struct param_list *params)
 		break;
 	case 1042:
 		map_custom_steps = false;
+		break;
+	case 1043: { // footsteps from a screen record: "hh_251,hh_251a,hh_252,hh_252a"
+		char buf[128];
+		snprintf(buf, sizeof(buf), "%s", name_param(params, 1, 1));
+		unsigned k = 0;
+		for (char *t = strtok(buf, ","); t && k < 4; t = strtok(NULL, ","), k++)
+			snprintf(map_steps[k], sizeof(map_steps[k]), "%.26s.wav", t);
+		if (k == 4)
+			map_custom_steps = true;
+		break;
+	}
+	case 1044: // after the records were replayed (we update the sound on the map)
 		break;
 	case 1016: case 1030: // not handled by HH2D.exe
 		break;
