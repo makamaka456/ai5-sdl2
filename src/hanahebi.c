@@ -2128,6 +2128,14 @@ static void util_item_select(unsigned person)
 	codes[n++] = 514;
 	int r = choice_run(items, n);
 	mem_set_var32(8, r < 0 ? 515 : codes[r]);
+	/*
+	 * var16[12]: the training mini game, 1 = automatic (the scripts then
+	 * give a score of 3: System.var16[200] = 3), 0 = played (Util 66/67,
+	 * score 0..7 from the hit rate, HH2D.exe 0x42e6e0). The original
+	 * screen has a switch for it; we do not have the mini game yet, so
+	 * training is always automatic.
+	 */
+	mem_set_var16(12, 1);
 }
 
 static void util_item_get(unsigned tool, unsigned grade)
@@ -5717,7 +5725,7 @@ static const char *ft_tool[10] = { "vib", "zuiki", "paizuri", "fella", "anal",
 static const char *ft_tool_ko[10] = { "바이브", "토란 줄기 감기", "파이즈리", "펠라치오",
 	"애널 드릴", "이뇨제", "관장", "승마 채찍", "청죽", "촛농" };
 static const char *ft_level[3] = { "1st", "2nd", "3rd" };
-static int ft_sel_tool = -1, ft_sel_level = -1, ft_exp = 0, ft_auto = 0;
+static int ft_sel_tool = -1, ft_sel_level = -1, ft_exp = 0, ft_auto = 1;
 
 static bool ft_scene_exists(int c, int tool, int level)
 {
@@ -5780,7 +5788,8 @@ static void util_free_training(struct param_list *params)
 		snprintf(l_tool, sizeof(l_tool), "%s — 도구: %s", ft_chr_ko[c], ft_tool_ko[ft_sel_tool]);
 		snprintf(l_level, sizeof(l_level), c == 4 ? "단계: (없음)" : "단계: %d단계", ft_sel_level + 1);
 		snprintf(l_exp, sizeof(l_exp), "조교 경험: %s", exp_ko[ft_exp]);
-		snprintf(l_mini, sizeof(l_mini), "미니게임: %s", ft_auto ? "자동" : "수동");
+		// the mini game itself is not made yet: always automatic
+		snprintf(l_mini, sizeof(l_mini), "미니게임: 자동 (직접 하기는 아직 없음)");
 		const char *items[6] = { l_tool, l_level, l_exp, l_mini, "조교 시작", "인물 바꾸기" };
 		int r = choice_run(items, 6);
 		if (r < 0 || r == 5) {
@@ -5817,7 +5826,7 @@ static void util_free_training(struct param_list *params)
 		} else if (r == 2) {
 			ft_exp = (ft_exp + 1) % 3;
 		} else if (r == 3) {
-			ft_auto = !ft_auto;
+			ft_auto = 1;
 		} else if (r == 4) {
 			uint8_t *heap = memory_raw + mem_get_sysvar16(0);
 			heap[0] = c == 4 ? 0 : ft_sel_level;
