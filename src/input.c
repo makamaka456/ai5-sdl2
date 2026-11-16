@@ -1,3 +1,4 @@
+#include <stdio.h>
 /* Copyright (C) 2023 Nunuhara Cabbage <nunuhara@haniwa.technology>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -289,6 +290,15 @@ static void controller_update_analog(void)
 			mouse_fx + stick_x * config.controller.cursor_speed);
 	float move_fy = clamp(0.0f, (float)(gfx_view.h-1),
 			mouse_fy + stick_y * config.controller.cursor_speed);
+#ifdef __ANDROID__
+	// Android: no visible system cursor and warping is unreliable; move
+	// our own cursor (drawn by gfx) instead
+	(void)move_fx; (void)move_fy;
+	if (stick_x != 0.0f || stick_y != 0.0f)
+		cursor_virtual_move(stick_x * config.controller.cursor_speed,
+				stick_y * config.controller.cursor_speed);
+	return;
+#endif
 	int move_ix, move_iy;
 	SDL_RenderLogicalToWindow(gfx.renderer, move_fx, move_fy, &move_ix, &move_iy);
 
@@ -322,6 +332,73 @@ static bool active_controller(int which)
 			SDL_GameControllerGetJoystick(controller));
 }
 
+
+/*
+ * Touch (mouse events with which == SDL_TOUCH_MOUSEID): a tap is a left click
+ * sent when the finger is lifted; holding still for TOUCH_HOLD_MS is a right
+ * click; moving the finger turns it into a normal held left button (drag).
+ */
+#define TOUCH_HOLD_MS 500
+#define TOUCH_SLOP 24
+static struct {
+	enum { TOUCH_NONE, TOUCH_PENDING, TOUCH_LEFT, TOUCH_RIGHT } state;
+	uint32_t t;
+	int x, y;
+	uint32_t release_at; // tap: when to let the left button go
+} touch;
+
+static void touch_begin(int x, int y)
+{
+	touch.state = TOUCH_PENDING;
+	touch.t = SDL_GetTicks();
+	touch.x = x;
+	touch.y = y;
+}
+
+static void touch_move(int x, int y)
+{
+	if (touch.state == TOUCH_PENDING && (abs(x - touch.x) > TOUCH_SLOP || abs(y - touch.y) > TOUCH_SLOP)) {
+		touch.state = TOUCH_LEFT;
+		input_key_event(INPUT_ACTIVATE, true);
+	}
+}
+
+// returns true if the release was handled here
+static bool touch_end(void)
+{
+	switch (touch.state) {
+	case TOUCH_PENDING:
+		// short tap: press now, let go a little later so that loops
+		// polling the button see it
+		input_key_event(INPUT_ACTIVATE, true);
+		touch.release_at = SDL_GetTicks() + 80;
+		touch.state = TOUCH_NONE;
+		return true;
+	case TOUCH_RIGHT:
+		input_key_event(INPUT_CANCEL, false);
+		touch.state = TOUCH_NONE;
+		return true;
+	case TOUCH_LEFT:
+		touch.state = TOUCH_NONE;
+		return false; // normal left button up
+	default:
+		return false;
+	}
+}
+
+static void touch_update(void)
+{
+	uint32_t now = SDL_GetTicks();
+	if (touch.release_at && (int32_t)(now - touch.release_at) >= 0) {
+		touch.release_at = 0;
+		key_down[INPUT_ACTIVATE] = false;
+	}
+	if (touch.state == TOUCH_PENDING && now - touch.t >= TOUCH_HOLD_MS) {
+		touch.state = TOUCH_RIGHT;
+		input_key_event(INPUT_CANCEL, true);
+	}
+}
+
 void handle_events(void)
 {
 	SDL_Event e;
@@ -352,17 +429,36 @@ void handle_events(void)
 		case SDL_MOUSEBUTTONDOWN:
 			if (e.button.windowID != gfx.window_id)
 				break;
+			if (e.button.which == SDL_TOUCH_MOUSEID) {
+				cursor_virtual_off();
+				if (e.button.button == SDL_BUTTON_LEFT) {
+					touch_begin(e.button.x, e.button.y);
+					break;
+				}
+			}
 			mouse_event(&e.button, true);
 			break;
 		case SDL_MOUSEBUTTONUP:
 			if (e.button.windowID != gfx.window_id)
 				break;
+			if (e.button.which == SDL_TOUCH_MOUSEID && e.button.button == SDL_BUTTON_LEFT
+					&& touch_end())
+				break;
 			mouse_event(&e.button, false);
+			break;
+		case SDL_MOUSEMOTION:
+			if (e.motion.which == SDL_TOUCH_MOUSEID) {
+				cursor_virtual_off();
+				touch_move(e.motion.x, e.motion.y);
+			} else if (e.motion.windowID == gfx.window_id) {
+				cursor_virtual_off();
+			}
 			break;
 		case SDL_FINGERDOWN:
 			// two-finger tap = right click: drop the left click that
 			// the first finger produced
 			if (SDL_GetNumTouchFingers(e.tfinger.touchId) >= 2) {
+				touch.state = TOUCH_NONE;
 				key_down[INPUT_ACTIVATE] = false;
 				key_down_timestamp[INPUT_ACTIVATE] = 0;
 				input_key_event(INPUT_CANCEL, true);
@@ -404,7 +500,19 @@ void handle_events(void)
 			break;
 		}
 	}
+	touch_update();
 	controller_update_analog();
+	// test: AI5_DEBUG_VCURSOR="x,y" moves the software cursor there once
+	static bool vtest_done = false;
+	if (!vtest_done) {
+		vtest_done = true;
+		const char *v = getenv("AI5_DEBUG_VCURSOR");
+		int vx, vy;
+		if (v && sscanf(v, "%d,%d", &vx, &vy) == 2) {
+			cursor_virtual_move(0, 0);
+			cursor_set_pos(vx, vy);
+		}
+	}
 #ifdef __ANDROID__
 	controller_env_apply();
 #endif

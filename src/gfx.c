@@ -28,6 +28,7 @@
 #include "ai5.h"
 #include "game.h"
 #include "gfx_private.h"
+#include "cursor.h"
 #include "vm.h"
 
 #define gfx_decode_direct(color) _gfx_decode_direct(color, __func__)
@@ -472,6 +473,28 @@ static void gfx_draw_background(void)
 	SDL_RenderSetLogicalSize(gfx.renderer, gfx_view.w, gfx_view.h);
 }
 
+
+// software cursor (see cursor_virtual_move): an arrow in logical coordinates
+static void gfx_draw_virtual_cursor(void)
+{
+	int cx, cy;
+	if (!cursor_virtual_pos(&cx, &cy))
+		return;
+	// arrow rows: width (from x0) per row
+	static const uint8_t w[17] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 4, 3, 3, 3, 2, 2 };
+	static const uint8_t x0[17] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 5, 5, 6, 6 };
+	SDL_SetRenderDrawBlendMode(gfx.renderer, SDL_BLENDMODE_NONE);
+	SDL_SetRenderDrawColor(gfx.renderer, 0, 0, 0, 255);
+	for (int y = 0; y < 17; y++) {
+		SDL_Rect r = { cx + x0[y] - 1, cy + y - 1, w[y] + 2, 3 };
+		SDL_RenderFillRect(gfx.renderer, &r);
+	}
+	SDL_SetRenderDrawColor(gfx.renderer, 255, 255, 255, 255);
+	for (int y = 0; y < 16; y++)
+		SDL_RenderDrawLine(gfx.renderer, cx + x0[y], cy + y, cx + x0[y] + w[y] - 1, cy + y);
+	SDL_SetRenderDrawColor(gfx.renderer, 0, 0, 0, 255);
+}
+
 void gfx_update(void)
 {
 	struct gfx_surface *screen = &gfx.surface[gfx.screen];
@@ -509,6 +532,7 @@ void gfx_update(void)
 	} else {
 		SDL_CALL(SDL_RenderCopy, gfx.renderer, gfx.texture, NULL, NULL);
 	}
+	gfx_draw_virtual_cursor();
 	SDL_RenderPresent(gfx.renderer);
 	gfx_clean(gfx.screen);
 }

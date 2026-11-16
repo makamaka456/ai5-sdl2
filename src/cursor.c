@@ -997,9 +997,51 @@ void cursor_hide(void)
 	SDL_ShowCursor(SDL_DISABLE);
 }
 
+static bool vcur_on = false;
+static float vcur_x = 0, vcur_y = 0;
+
+static void real_cursor_get_pos(unsigned *x_out, unsigned *y_out);
+
+void cursor_virtual_move(float dx, float dy)
+{
+	if (!vcur_on) {
+		unsigned x, y;
+		real_cursor_get_pos(&x, &y);
+		vcur_x = x;
+		vcur_y = y;
+		vcur_on = true;
+	}
+	vcur_x = clamp(0.0f, (float)(gfx_view.w - 1), vcur_x + dx);
+	vcur_y = clamp(0.0f, (float)(gfx_view.h - 1), vcur_y + dy);
+	gfx_screen_dirty();
+}
+
+void cursor_virtual_off(void)
+{
+	if (!vcur_on)
+		return;
+	vcur_on = false;
+	gfx_screen_dirty();
+}
+
+bool cursor_virtual_pos(int *x, int *y)
+{
+	if (!vcur_on)
+		return false;
+	*x = (int)vcur_x;
+	*y = (int)vcur_y;
+	return true;
+}
+
 void cursor_set_pos(unsigned x, unsigned y)
 {
 	CURSOR_LOG("cursor_set_pos(%u,%u)", x, y);
+	if (vcur_on) {
+		vcur_x = x;
+		vcur_y = y;
+		gfx_screen_dirty();
+		return;
+	}
 	if (config.no_warp_mouse)
 		return;
 	int wx, wy;
@@ -1008,6 +1050,16 @@ void cursor_set_pos(unsigned x, unsigned y)
 }
 
 void cursor_get_pos(unsigned *x_out, unsigned *y_out)
+{
+	if (vcur_on) {
+		*x_out = (unsigned)vcur_x;
+		*y_out = (unsigned)vcur_y;
+		return;
+	}
+	real_cursor_get_pos(x_out, y_out);
+}
+
+static void real_cursor_get_pos(unsigned *x_out, unsigned *y_out)
 {
 	int x, y;
 	SDL_GetMouseState(&x, &y);

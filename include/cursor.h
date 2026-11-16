@@ -26,6 +26,11 @@ void cursor_hide(void);
 void cursor_set_pos(unsigned x, unsigned y);
 void cursor_get_pos(unsigned *x, unsigned *y);
 void cursor_swap(void);
+// software cursor moved by a controller stick (Android, where the system
+// cursor is invisible and warping is unreliable)
+void cursor_virtual_move(float dx, float dy);
+void cursor_virtual_off(void);
+bool cursor_virtual_pos(int *x, int *y);
 
 enum cursor_direction {
 	CURSOR_DIR_NONE = 0,

@@ -53,3 +53,7 @@
 ## 같이 처리할 다른 게임 문제 (CLAUDE.md "다른 게임 지원 때 검토할 것"과 같음)
 - 유작 안드로이드 `SDL_CreateWindow: Android only supports one window` → 아이템 창은 덮개로 바꿈(폰 확인 필요),
   오른쪽 클릭 메뉴(`popup_menu.c`)·취작 일정표/상태 창(`shuusaku/schedule.c`, `status.c`)도 화면 안으로 다시 그려야 함.
+
+## 이미 한 공통 입력 변경 (2026-11-16, 꽃과뱀 방에서)
+- 터치: 탭=손 뗄 때 왼쪽 클릭, 0.5초 누르기=오른쪽 클릭, 끌기, 두 손가락 탭=오른쪽 클릭 (`src/input.c` touch_*)
+- 스틱 커서(안드로이드): 엔진 자체 화살표 커서 (`cursor_virtual_move/off/pos`, `gfx_draw_virtual_cursor`). 다른 게임에서도 같은 방식. 폰 확인 필요

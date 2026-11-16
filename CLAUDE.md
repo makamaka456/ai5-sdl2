@@ -171,6 +171,7 @@ SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./build/ai5 <게임폴더>
   - 게임 파일은 복사하지 않고 "모든 파일 접근" 권한으로 폴더를 직접 읽음. 글꼴은 assets → 앱 폴더로 복사 후 `AI5_DATA_DIR` 환경 변수로 엔진에 알림
 - 런처(2026-11-15 개편): 지원 게임 목록 + 게임별 폴더, 각 줄 [배경화면] 버튼(그림 → 앱 폴더 `bg_<게임>.png`), 화면 꽉 채우기, 게임패드 설정. 공용 설정은 `AppSettings.java`(SharedPreferences "launcher", 두 프로세스가 같이 씀)
 - 게임 화면: 가상 버튼(오른쪽 메뉴·넘기기·⚙, 왼쪽 숨기기·지난 대사, 선택: 결정·효과 빨리), ⚙ = 화면 비율·배경화면·버튼 크기/투명도/위치(끌어서)·게임패드·버튼 숨기기·끝내기
+- **터치·스틱 커서** (2026-11-16, 모든 게임 공통, `src/input.c`·`cursor.c`·`gfx.c`): 터치 탭 = 손 뗄 때 왼쪽 클릭(80ms 눌림), 0.5초 가만히 누르기 = 오른쪽 클릭, 24px 넘게 움직이면 끌기(왼쪽 누름 유지), 두 손가락 탭 = 오른쪽 클릭. 안드로이드에서 스틱이 CURSOR면 SDL 마우스 이동 대신 **엔진 자체 커서**(`cursor_virtual_*`, 화면에 흰 화살표)를 움직이고 cursor_get_pos가 그 위치를 돌려줌 → 결정 버튼이 그 자리 클릭. 터치·실제 마우스 움직임이 있으면 자체 커서는 꺼짐. PC 시험: `AI5_DEBUG_VCURSOR="x,y"`(스크린샷 확인: 타이틀 버튼 강조·Enter로 선택). 폰 실기 확인 필요
 - 엔진 환경 변수: `AI5_STRETCH`(1=꽉 채우기), `AI5_BACKGROUND`(PNG 경로, 화면 전체 배경), 둘 다 매 프레임 확인해서 게임 중 바로 바뀜. `AI5_CONTROLLER`는 시작할 때만 읽음
 - 서명: 고정 키 `android/ai5-launcher.keystore`(비밀번호 ai5launcher, 일부러 공개. 덮어 설치가 되게 하려는 것). 키를 바꾸면 사용자가 앱을 지우고 다시 설치해야 함
 - 고정 다운로드 주소: 브랜치에 푸시하면 Releases의 `android-latest`(사전 출시)에 `ai5-launcher.apk`가 올라감 → https://github.com/makamaka456/ai5-sdl2/releases/tag/android-latest
