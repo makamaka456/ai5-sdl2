@@ -2396,15 +2396,17 @@ static const struct { const char *label, *section, *key; int min, max, def; } hh
 	{ "자동 진행", "MsgMode", "AutoMes", 0, 1, 0 },
 	{ "화면 효과 속도", "DispEffect", "Play", 0, 3, 1 },
 	// ours (not in the original): every CG / scene / ending / free training open
-	{ "회상·감상 전부 열기", "HHLauncher", "UnlockAll", 0, 1, 0 },
+	{ "회상·감상 전부 열기", "HHLauncher", "OpenAll", 0, 1, 1 },
 };
 
 static bool hh_unlock_all(void)
 {
 	if (getenv("HH_DEBUG_UNLOCK"))
 		return true;
-	const char *v = config_ini_get("HHLauncher", "UnlockAll");
-	return v && atoi(v) == 1;
+	// on unless turned off in the settings (the user wants every replay
+	// available from the start, for checking)
+	const char *v = config_ini_get("HHLauncher", "OpenAll");
+	return !v || atoi(v) == 1;
 }
 
 static int hh_opt_get(unsigned i)
