@@ -432,12 +432,12 @@ final class ButtonLayer {
         return t;
     }
 
-    private LinearLayout row(View a, View b) {
+    private LinearLayout row(View first, View second) {
         LinearLayout r = new LinearLayout(a);
         r.setOrientation(LinearLayout.HORIZONTAL);
         r.setGravity(Gravity.CENTER_VERTICAL);
-        r.addView(a);
-        r.addView(b);
+        r.addView(first);
+        r.addView(second);
         return r;
     }
 
