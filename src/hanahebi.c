@@ -174,14 +174,171 @@ static void util_backlog_view(void);
 static void bl_add_text(const char *text);
 static void work_text(int x, int y, const char *text);
 
-#define SYS_STUB(n) \
-	static void sys_stub_##n(struct param_list *params) \
-	{ \
-		log_unimplemented("System.function", n, params); \
-	}
-SYS_STUB(3)
+/*
+ * System.function[3]: .ax animations (HH2D.exe 0x41b170.. class, vtable 0x4a9940).
+ *   .ax file (loaded into file_data with [8](0,"x.ax",off)):
+ *     u32 offset[10][32] (stream bytecode, relative to file start),
+ *     draw table at 0x500: {u32 type, sx, sy, w, h, dx, dy} (0x1c bytes)
+ *   bytecode: 0 nop, 1 n wait n ticks, 2 n stall n, 3 restart, 4/0xff end,
+ *     5 n/6 loop, 7 n/8 loop2, else u32 draw index.
+ *   draw types: 0 copy from surface 7, 1 masked (0xff00) from surface 1,
+ *     2 nothing, 3 copy from surface 1; always onto surface 0 (the screen).
+ *   (0, g, s, off, obj) load, (1, g, s) run, (2) stop after wait, (3) end,
+ *   (4, g, s) run and wait until done, (6) step, (7) end all, (8) stop all,
+ *   (9) paused -> running, (10) wait for all.
+ * Scripts only use 0+4 (door/tanuki/ef animations), 7, 8 and 9, so we
+ * play streams blocking; nothing keeps running in the background.
+ */
+#define AX_STREAMS (10 * 32)
+static struct {
+	uint32_t file;   // offset of the .ax file in file_data
+	uint32_t code;   // offset of the bytecode
+	unsigned state, ip, wait, stall;
+	unsigned loop_ip, loop_n, loop_n0, loop2_ip, loop2_n, loop2_n0;
+} ax[AX_STREAMS];
 
-SYS_STUB(28)
+static uint32_t ax_u32(uint32_t off)
+{
+	return off + 4 <= MEMORY_FILE_DATA_SIZE ? le_get32(memory.file_data, off) : 0xffffffff;
+}
+
+static void ax_draw(unsigned i, uint32_t idx)
+{
+	uint32_t e = ax[i].file + 0x500 + idx * 0x1c;
+	if (e + 0x1c > MEMORY_FILE_DATA_SIZE)
+		return;
+	uint32_t type = ax_u32(e), sx = ax_u32(e + 4), sy = ax_u32(e + 8), w = ax_u32(e + 12),
+		 h = ax_u32(e + 16), dx = ax_u32(e + 20), dy = ax_u32(e + 24);
+	switch (type) {
+	case 0: gfx_copy(sx, sy, w, h, 7, dx, dy, 0); break;
+	case 1: gfx_copy_masked(sx, sy, w, h, 1, dx, dy, 0, 0x00ff00); break;
+	case 2: return;
+	default: gfx_copy(sx, sy, w, h, 1, dx, dy, 0); break;
+	}
+	gfx_dirty(0, dx, dy, w, h);
+}
+
+// one tick of a stream (HH2D.exe 0x41b3b0)
+static void ax_step(unsigned i)
+{
+	if (ax[i].stall) {
+		ax[i].stall--;
+		return;
+	}
+	if (ax[i].wait) {
+		if (ax[i].state == 1)
+			ax[i].state = 0xff;
+		else if (ax[i].state == 3)
+			ax[i].state = 4;
+		ax[i].wait--;
+		return;
+	}
+	uint32_t at = ax[i].code + ax[i].ip;
+	if (at >= MEMORY_FILE_DATA_SIZE) {
+		ax[i].state = 0xff;
+		return;
+	}
+	uint8_t op = memory.file_data[at];
+	ax[i].ip++;
+	switch (op) {
+	case 0: break;
+	case 1:
+		if (ax[i].state == 1)
+			ax[i].state = 0xff;
+		else if (ax[i].state == 3)
+			ax[i].state = 4;
+		ax[i].wait = ax_u32(at + 1);
+		ax[i].ip += 4;
+		break;
+	case 2: ax[i].stall = ax_u32(at + 1); ax[i].ip += 4; break;
+	case 3: ax[i].ip = 0; break;
+	case 4: case 0xff: ax[i].state = 0xff; break;
+	case 5:
+		ax[i].loop_n = ax[i].loop_n0 = ax_u32(at + 1);
+		ax[i].ip += 4;
+		ax[i].loop_ip = ax[i].ip;
+		break;
+	case 6:
+		if (ax[i].loop_n0 == 0 || --ax[i].loop_n != 0)
+			ax[i].ip = ax[i].loop_ip;
+		break;
+	case 7:
+		ax[i].loop2_n = ax[i].loop2_n0 = ax_u32(at + 1);
+		ax[i].ip += 4;
+		ax[i].loop2_ip = ax[i].ip;
+		break;
+	case 8:
+		if (ax[i].loop2_n0 == 0 || --ax[i].loop2_n != 0)
+			ax[i].ip = ax[i].loop2_ip;
+		break;
+	default:
+		ax[i].ip += 4;
+		ax_draw(i, ax_u32(at + 1));
+		break;
+	}
+}
+
+static void ax_run(unsigned i)
+{
+	ax[i].state = 0;
+	uint32_t last = vm_get_ticks();
+	unsigned guard = 0;
+	while (ax[i].state != 0xff && ax[i].state != 4 && guard++ < 100000) {
+		bool fast = input_down(INPUT_CTRL);
+		// one tick per 16ms (60 per second); Ctrl runs it through
+		uint32_t now = vm_get_ticks();
+		unsigned n = fast ? 1000 : (now - last) / 16;
+		if (n) {
+			last = now;
+			while (n-- && ax[i].state != 0xff && ax[i].state != 4)
+				ax_step(i);
+		}
+		vm_peek();
+		vm_delay(4);
+	}
+	ax[i].state = 0xff;
+}
+
+static void hanahebi_ax(struct param_list *params)
+{
+	unsigned g = param_or(params, 1, 0), s = param_or(params, 2, 0);
+	unsigned i = (g * 32 + s) % AX_STREAMS;
+	switch (vm_expr_param(params, 0)) {
+	case 0: {
+		uint32_t off = param_or(params, 3, 0);
+		memset(&ax[i], 0, sizeof(ax[i]));
+		ax[i].file = off;
+		ax[i].code = off + ax_u32(off + i * 4);
+		ax[i].state = 0xff;
+		break;
+	}
+	case 1: case 4: case 5:
+		if (ax[i].code)
+			ax_run(i);
+		break;
+	case 2: case 3:
+		ax[i].state = 0xff;
+		break;
+	case 6: case 9: case 10:
+		break;
+	case 7: case 8:
+		for (unsigned k = 0; k < AX_STREAMS; k++)
+			ax[k].state = 0xff;
+		break;
+	default:
+		log_unimplemented("System.function", 3, params);
+	}
+}
+
+/*
+ * System.function[28](2): only after system menu code 3 / replay menu code 1,
+ * which our menus do not offer (HH2D.exe: VM vtable +0x74, not identified).
+ */
+static void hanahebi_sys28(struct param_list *params)
+{
+	if (vm_expr_param(params, 0) != 2)
+		log_unimplemented("System.function", 28, params);
+}
 
 /*
  * Character sprites (Util 50, HH2D.exe 0x429xxx/0x42axxx).
@@ -3279,6 +3436,8 @@ static void hanahebi_cursor(struct param_list *params)
 		mem_set_var16(25, dir == CURSOR_DIR_UP || dir == CURSOR_DIR_DOWN);
 		break;
 	}
+	case 6: // after menus/backlog with 0; probably the cursor shape (we have one)
+		break;
 	default:
 		log_unimplemented("System.function", 2, params);
 	}
@@ -5370,7 +5529,7 @@ struct game game_hanahebi = {
 	.sys = {
 		[0]  = hanahebi_set_font_size,
 		[2]  = hanahebi_cursor,
-		[3]  = sys_stub_3,
+		[3]  = hanahebi_ax,
 		[4]  = hanahebi_savedata,
 		[5]  = hanahebi_bgm,
 		[6]  = hanahebi_se,
@@ -5390,7 +5549,7 @@ struct game game_hanahebi = {
 		[24] = hanahebi_screen_records,
 		[26] = hanahebi_read_flags,
 		[27] = hanahebi_settings,
-		[28] = sys_stub_28,
+		[28] = hanahebi_sys28,
 		[29] = hanahebi_get_time,
 	},
 	.util = {
