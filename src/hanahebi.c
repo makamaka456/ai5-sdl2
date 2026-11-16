@@ -1889,13 +1889,13 @@ static void items_read(unsigned no)
 
 /*
  * Util 8000(0, person, again): choose a tool for training. var32[8] =
- * tool * 3 + grade + 1, 513 = choose another person, 514 = end training,
+ * tool * 3 + grade + 1, 25 breasts / 26 mouth (no tool), 513 = choose another person, 514 = end training,
  * 515 = right click (system menu; the script calls again with again = 1).
  */
-static void util_item_select(void)
+static void util_item_select(unsigned person)
 {
-	const char *items[8 * 3 + 2];
-	int codes[8 * 3 + 2];
+	const char *items[8 * 3 + 4];
+	int codes[8 * 3 + 4];
 	char labels[8 * 3][48];
 	unsigned n = 0;
 	for (unsigned t = 0; t < 8; t++) {
@@ -1906,6 +1906,14 @@ static void util_item_select(void)
 			items[n] = labels[n];
 			codes[n++] = t * 3 + g + 1;
 		}
+	}
+	// 25/26 need no tool (CHECK_*.MES: paizuri / fella scenes; the scripts
+	// themselves refuse when the stage is too low). Chako has neither.
+	if (person < 4) {
+		items[n] = "가슴으로 조교 (파이즈리)";
+		codes[n++] = 25;
+		items[n] = "입으로 봉사 (펠라치오)";
+		codes[n++] = 26;
 	}
 	items[n] = "다른 상대 고르기";
 	codes[n++] = 513;
@@ -2953,7 +2961,7 @@ static void hanahebi_util(struct param_list *params)
 		if (param_or(params, 1, 0) == 1)
 			util_item_get(param_or(params, 2, 0), param_or(params, 3, 0));
 		else if (param_or(params, 1, 0) == 0)
-			util_item_select();
+			util_item_select(param_or(params, 2, 0));
 		else if (param_or(params, 1, 0) == 2)
 			util_item_list();
 		else
