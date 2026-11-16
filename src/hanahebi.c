@@ -5923,6 +5923,18 @@ static void hanahebi_mem_restore(void)
 		offsetof(struct memory, menu_entry_addresses));
 	mem_set_sysvar32(mes_sysvar32_menu_entry_numbers,
 		offsetof(struct memory, menu_entry_numbers));
+	/*
+	 * Work areas the original engine allocates for itself. They were left
+	 * at 0, so [8](0, "x.ax", data_offset) loaded over the running script
+	 * (FAS069 stopped: the .ax file overwrote its code) and [24](6, ...,
+	 * cg_offset) wrote a name over the MES name at the start of memory.
+	 *   data_offset, mpx_offset: offsets in file_data (files loaded there)
+	 *   cg_offset: an address in memory (a 32-byte name buffer)
+	 * The scripts are at most ~180 KB, loaded at file_data + 0.
+	 */
+	mem_set_sysvar32(mes_sysvar32_data_offset, 0x300000);
+	mem_set_sysvar32(mes_sysvar32_mpx_offset, 0x380000);
+	mem_set_sysvar32(mes_sysvar32_cg_offset, offsetof(struct memory, file_data) + 0x400000);
 	mem_set_sysvar16(0, HEAP_OFF);
 }
 
