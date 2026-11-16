@@ -1005,6 +1005,41 @@ static int choice_run(const char **items, unsigned n)
 	return result;
 }
 
+/*
+ * Automatic play along the walkthrough (debugging):
+ *   HH_DEBUG_CHOICE="FAS000=0,FAS060=2,..." picks the menu entry with that
+ *   defmenu number when the current script is FAS000 etc. (other menus are
+ *   left to the player / the random clicker).
+ */
+static int debug_choice(unsigned n)
+{
+	const char *spec = getenv("HH_DEBUG_CHOICE");
+	if (!spec)
+		return -1;
+	char cur[32];
+	snprintf(cur, sizeof(cur), "%s", mem_mes_name());
+	char *dot = strchr(cur, '.');
+	if (dot)
+		*dot = '\0';
+	for (const char *p = spec; *p; ) {
+		const char *eq = strchr(p, '='), *end = strchr(p, ',');
+		if (!end)
+			end = p + strlen(p);
+		if (eq && eq < end && (size_t)(eq - p) == strlen(cur) && !strncasecmp(p, cur, eq - p)) {
+			unsigned want = atoi(eq + 1);
+			for (unsigned i = 0; i < n; i++) {
+				menu_get_no(i);
+				if (mem_get_sysvar16(mes_sysvar16_menu_no) == want) {
+					NOTICE("choice: %s -> menu %u", cur, want);
+					return i;
+				}
+			}
+		}
+		p = *end ? end + 1 : end;
+	}
+	return -1;
+}
+
 static void util_choice(void)
 {
 	unsigned n = min(menu_count_entries(), CHOICE_MAX);
@@ -1018,7 +1053,9 @@ static void util_choice(void)
 		const char *t = (addr && addr + 1 < sizeof(struct memory)) ? mem_get_cstring(addr + 1) : "";
 		items[i] = ai5_cstring_to_utf8(t ? t : "", 0);
 	}
-	int r = choice_run((const char**)items, n);
+	int r = debug_choice(n);
+	if (r < 0)
+		r = choice_run((const char**)items, n);
 	for (unsigned i = 0; i < n; i++)
 		string_free(items[i]);
 	unsigned result = 0;
@@ -1879,6 +1916,64 @@ static void util_map_select(void)
 	// the table is loaded by Util 1019 (not again after loading a save)
 	if (!map.have_itm)
 		map_load_itm(0);
+	// debugging (automatic play along the walkthrough): HH_DEBUG_ROUTE=1
+	// visits the rooms of the current chapter (var4[785]) in the order of
+	// the walkthrough, round and round; people in the corridor first.
+	if (getenv("HH_DEBUG_ROUTE")) {
+		static const uint8_t route[10][12] = {
+			// 16 = kitchen (its menu leads to Onigen's room: HH_DEBUG_CHOICE
+			// FASMAP16=0), 17 = stairs to the basement, 21 = the ??? door,
+			// 20 = the basement training room (the walkthrough's 調教室)
+			[1] = { 2, 9, 5, 1, 16 },
+			[2] = { 14, 1, 9, 16, 21, 20, 18 },
+			[3] = { 5, 9, 13, 3, 12, 19, 16, 16, 16, 16 },
+			[4] = { 5, 9, 11, 2, 16, 14 },
+			[5] = { 10, 11, 3, 16, 6, 5, 9 },
+			[6] = { 14, 1, 20, 18, 1 },
+			[7] = { 3, 5, 1, 8, 3 },
+			[8] = { 13, 8, 19, 2, 16 },
+			[9] = { 8, 8, 2 },
+		};
+		static unsigned pos[10];
+		map_load_graph(map.floor);
+		map_show(map.dir * 2);
+		gfx_screen_dirty();
+		unsigned ch = memory_raw[VAR4_OFF + 785];
+		if (ch > 9)
+			ch = 9;
+		int room;
+		static int last_person = -1;
+		int person = map_nr_people ? (int)map_people[rand() % map_nr_people].id : -1;
+		if (person >= 0 && person != last_person && rand() % 3 == 0) {
+			room = last_person = person;
+		} else {
+			last_person = -1;
+			unsigned len = 0;
+			while (len < 12 && route[ch][len])
+				len++;
+			room = len ? route[ch][pos[ch] % len] : 1;
+			// stuck (three rounds without a new chapter): mix in random rooms
+			if (len && pos[ch] >= 3 * len && rand() % 2) {
+				unsigned k = rand() % (map_room_count() + 4);
+				room = k < map_room_count() ? (int)map_room_id(k) : (rand() % 2 ? 19 : 20);
+			}
+			static unsigned floor_tries;
+			bool basement = room == 19 || room == 20 || room == 22;
+			if (basement != (map.floor == 1) && floor_tries < 2) {
+				// change floors first (may not be open yet: give up after 2 tries)
+				room = map.floor == 1 ? 21 : 17;
+				floor_tries++;
+			} else {
+				if (basement != (map.floor == 1))
+					room = map.floor == 1 ? 21 : 1;
+				floor_tries = 0;
+				pos[ch]++;
+			}
+		}
+		NOTICE("map: route ch %u -> %d", ch, room);
+		mem_set_var32(12, room);
+		return;
+	}
 	// debugging (automatic play): HH_DEBUG_MAP_RANDOM=1 picks a random room
 	if (getenv("HH_DEBUG_MAP_RANDOM")) {
 		map_load_graph(map.floor);
