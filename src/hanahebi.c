@@ -55,6 +55,7 @@
 #include "vm_private.h"
 #ifdef HAVE_FFMPEG
 #include "movie.h"
+#include "hanahebi_dic.h"
 #endif
 
 /*
@@ -164,6 +165,72 @@ static int msgwin_icon_state;
 static void apply_volume(enum audio_channel ch, const char *section);
 static bool setting_enabled(const char *section, const char *key);
 static bool confirm(const char *question);
+static void dic_popup(unsigned i);
+
+#define MSGWIN_SURFACE 9
+#define MSGWIN_Y       352
+#define MSGWIN_H       128
+
+/*
+ * Dictionary words in the message window (Util 9000). HH2D.exe finds them
+ * while drawing: a text statement that is exactly a dictionary word becomes
+ * clickable. We do the same with the Korean words (hanahebi_dic.h).
+ *   (9000, 0) clear, (9000, 1, x, y) -> var16[10] = 0x100 + word or 0xffff,
+ *   (9000, 2, id, state) highlight on/off, (9000, 3, id) explanation popup.
+ */
+#define DIC_MAX_WORDS 16
+#define DIC_MAX_CHARS 24
+static struct {
+	unsigned idx;
+	unsigned nr;
+	SDL_Rect r[DIC_MAX_CHARS];
+} dic_words[DIC_MAX_WORDS];
+static unsigned dic_nr_words;
+static int dic_hover = -1;
+
+static int dic_lookup(const char *utf8)
+{
+	if (*utf8 == ' ')
+		utf8++;
+	size_t len = strlen(utf8);
+	if (!len)
+		return -1;
+	for (unsigned i = 0; i < HH_DIC_COUNT; i++) {
+		const char *m = hh_dic[i].match;
+		while (*m) {
+			const char *end = strchr(m, '|');
+			size_t n = end ? (size_t)(end - m) : strlen(m);
+			bool prefix = n > 0 && m[n - 1] == '*';
+			size_t wn = prefix ? n - 1 : n;
+			if (wn && (prefix ? (len >= wn && !strncmp(utf8, m, wn)) : (len == wn && !strncmp(utf8, m, wn))))
+				return i;
+			if (!end)
+				break;
+			m = end + 1;
+		}
+	}
+	return -1;
+}
+
+static void msgwin_draw_dic(SDL_Surface *ov, bool behind)
+{
+	for (unsigned w = 0; w < dic_nr_words; w++) {
+		bool hot = (int)w == dic_hover;
+		for (unsigned c = 0; c < dic_words[w].nr; c++) {
+			SDL_Rect r = dic_words[w].r[c];
+			r.y += MSGWIN_Y;
+			if (behind) {
+				// highlight goes under the text
+				if (hot)
+					SDL_CALL(SDL_FillRect, ov, &r, SDL_MapRGBA(ov->format, 50, 90, 200, 200));
+				continue;
+			}
+			SDL_Rect u = { r.x, r.y + r.h - 1, r.w, 2 };
+			SDL_CALL(SDL_FillRect, ov, &u, SDL_MapRGBA(ov->format, 120, 180, 255, 230));
+		}
+	}
+}
+
 static void util_scroll(struct param_list *params);
 static void util_room(struct param_list *params);
 static void util_ending_mode(unsigned last_tab);
@@ -2214,7 +2281,17 @@ static const struct { const char *label, *section, *key; int min, max, def; } hh
 	{ "자동 진행 빠르기", "MsgMode", "Speed", 0, 9, 5 },
 	{ "자동 진행", "MsgMode", "AutoMes", 0, 1, 0 },
 	{ "화면 효과 속도", "DispEffect", "Play", 0, 3, 1 },
+	// ours (not in the original): every CG / scene / ending / free training open
+	{ "회상·감상 전부 열기", "HHLauncher", "UnlockAll", 0, 1, 0 },
 };
+
+static bool hh_unlock_all(void)
+{
+	if (getenv("HH_DEBUG_UNLOCK"))
+		return true;
+	const char *v = config_ini_get("HHLauncher", "UnlockAll");
+	return v && atoi(v) == 1;
+}
 
 static int hh_opt_get(unsigned i)
 {
@@ -2597,6 +2674,79 @@ static void ov_text(SDL_Surface *ov, int cx, int y, int size, ...)
 	SDL_FreeSurface(ws);
 	gfx_text_set_colors(old_bg, old_fg);
 	gfx_text_set_size(mem_get_sysvar16(mes_sysvar16_font_height), 0);
+}
+
+
+// explanation window for dictionary word i (overlay 2), until a click
+static void dic_popup(unsigned i)
+{
+	if (i >= HH_DIC_COUNT)
+		return;
+	const struct hh_dic_entry *e = &hh_dic[i];
+	unsigned lines = 1;
+	for (const char *p = e->text; *p; p++)
+		lines += *p == '\n';
+	int h = 56 + lines * 22, y0 = max(8, (480 - h) / 2 - 40);
+	SDL_Surface *ov = gfx_get_overlay(2);
+	SDL_CALL(SDL_FillRect, ov, NULL, SDL_MapRGBA(ov->format, 0, 0, 0, 90));
+	SDL_Rect box = { 16, y0, 608, h };
+	SDL_CALL(SDL_FillRect, ov, &box, SDL_MapRGBA(ov->format, 200, 40, 40, 255));
+	SDL_Rect in = { 18, y0 + 2, 604, h - 4 };
+	SDL_CALL(SDL_FillRect, ov, &in, SDL_MapRGBA(ov->format, 28, 8, 12, 245));
+	ov_text(ov, -34, y0 + 12, 22, e->word, 0xffd860u, NULL);
+	char line[256];
+	const char *p = e->text;
+	for (unsigned l = 0; l < lines; l++) {
+		const char *end = strchr(p, '\n');
+		size_t n = end ? (size_t)(end - p) : strlen(p);
+		if (n >= sizeof(line))
+			n = sizeof(line) - 1;
+		memcpy(line, p, n);
+		line[n] = 0;
+		ov_text(ov, -34, y0 + 46 + l * 22, 17, line, 0xf0ece0u, NULL);
+		p = end ? end + 1 : p + n;
+	}
+	gfx_overlay_enable(2);
+	gfx_screen_dirty();
+	input_wait_until_up(INPUT_ACTIVATE);
+	while (!input_down(INPUT_ACTIVATE) && !input_down(INPUT_CANCEL)) {
+		vm_peek();
+		vm_delay(16);
+	}
+	input_wait_until_up(INPUT_ACTIVATE);
+	input_wait_until_up(INPUT_CANCEL);
+	gfx_overlay_disable(2);
+	gfx_screen_dirty();
+}
+
+// word list (system menu "용어 사전"): pages of 12
+static void dic_list(void)
+{
+	unsigned page = 0;
+	const unsigned per = 12, pages = (HH_DIC_COUNT + per - 1) / per;
+	char head[64];
+	while (true) {
+		const char *items[16];
+		int codes[16];
+		unsigned n = 0;
+		for (unsigned i = page * per; i < HH_DIC_COUNT && i < (page + 1) * per; i++) {
+			items[n] = hh_dic[i].word;
+			codes[n++] = i;
+		}
+		snprintf(head, sizeof(head), "다음 쪽 (%u/%u)", page + 1, pages);
+		items[n] = head;
+		codes[n++] = -2;
+		items[n] = "닫기";
+		codes[n++] = -1;
+		int r = choice_run(items, n);
+		if (r < 0 || codes[r] == -1)
+			return;
+		if (codes[r] == -2) {
+			page = (page + 1) % pages;
+			continue;
+		}
+		dic_popup(codes[r]);
+	}
 }
 
 // fill the inside of a notice frame with its own background colour (to erase Japanese text)
@@ -3046,9 +3196,44 @@ static void hanahebi_util(struct param_list *params)
 		if (msgwin_visible)
 			msgwin_compose();
 		break;
-	case 9000: // clickable words in the text (dictionary): none
-		if (param_or(params, 1, 0) == 1)
-			mem_set_var16(10, 0xffff);
+	case 9000: // clickable dictionary words in the message window
+		switch (param_or(params, 1, 0)) {
+		case 0:
+			dic_nr_words = 0;
+			dic_hover = -1;
+			break;
+		case 1: {
+			int x = param_or(params, 2, 0), y = param_or(params, 3, 0) - MSGWIN_Y;
+			unsigned id = 0xffff;
+			for (unsigned w = 0; w < dic_nr_words && id == 0xffff; w++) {
+				for (unsigned c = 0; c < dic_words[w].nr; c++) {
+					SDL_Rect *r = &dic_words[w].r[c];
+					if (x >= r->x && x < r->x + r->w && y >= r->y && y < r->y + r->h + 2) {
+						id = 0x100 + w;
+						break;
+					}
+				}
+			}
+			mem_set_var16(10, id);
+			break;
+		}
+		case 2: {
+			unsigned id = param_or(params, 2, 0xffff);
+			int hover = param_or(params, 3, 0) && id >= 0x100 && id - 0x100 < dic_nr_words ? (int)(id - 0x100) : -1;
+			if (hover != dic_hover) {
+				dic_hover = hover;
+				if (msgwin_visible)
+					msgwin_compose();
+			}
+			break;
+		}
+		case 3: {
+			unsigned id = param_or(params, 2, 0xffff);
+			if (id >= 0x100 && id - 0x100 < dic_nr_words)
+				dic_popup(dic_words[id - 0x100].idx);
+			break;
+		}
+		}
 		break;
 	case 502: msgwin_show(); break;
 	case 503: msgwin_hide(); break;
@@ -3189,9 +3374,6 @@ static void hanahebi_set_colors(struct param_list *params)
  * Util(502) shows it, Util(503) hides it.
  * TODO: exact behavior of HH2D.exe (object at +0x21778)
  */
-#define MSGWIN_SURFACE 9
-#define MSGWIN_Y       352
-#define MSGWIN_H       128
 static bool msgwin_visible = false;
 
 // draw the message window into overlay 0 (shown on top of the screen)
@@ -3227,6 +3409,7 @@ static void msgwin_draw_icon(SDL_Surface *ov)
 	SDL_BlitSurface(msgwin_icons, &src, ov, &dst);
 }
 
+
 static void msgwin_compose(void)
 {
 	// window color from AI5WIN.INI [Mes] nRed/nGreen/nBlue/nAlpha
@@ -3240,11 +3423,13 @@ static void msgwin_compose(void)
 	SDL_Rect r = { 0, MSGWIN_Y, 640, MSGWIN_H };
 	SDL_CALL(SDL_FillRect, ov, &r, SDL_MapRGBA(ov->format, cr ? atoi(cr) : 0,
 			cg ? atoi(cg) : 0, cb ? atoi(cb) : 0, alpha));
+	msgwin_draw_dic(ov, true);
 	SDL_Surface *text = gfx_get_surface(MSGWIN_SURFACE);
 	SDL_Rect src = { 0, 0, 640, MSGWIN_H };
 	SDL_CALL(SDL_SetColorKey, text, SDL_TRUE, SDL_MapRGB(text->format, 0, 0, 0));
 	SDL_CALL(SDL_BlitSurface, text, &src, ov, &r);
 	SDL_CALL(SDL_SetColorKey, text, SDL_FALSE, 0);
+	msgwin_draw_dic(ov, false);
 	msgwin_draw_icon(ov);
 	gfx_overlay_enable(0);
 	gfx_screen_dirty();
@@ -3276,7 +3461,53 @@ static void hanahebi_draw_text(const char *text)
 			mem_get_sysvar16(mes_sysvar16_char_space), mem_get_sysvar16(mes_sysvar16_line_space),
 			mem_get_sysvar16(mes_sysvar16_font_height));
 	bl_add_text(text);
-	vm_draw_text(text, 1);
+	int dic = -1;
+	if (mem_get_sysvar16(mes_sysvar16_dst_surface) == MSGWIN_SURFACE && dic_nr_words < DIC_MAX_WORDS) {
+		string utf8 = ai5_cstring_to_utf8(text, 0);
+		dic = dic_lookup(utf8);
+		string_free(utf8);
+	}
+	if (dic < 0) {
+		vm_draw_text(text, 1);
+	} else {
+		// draw one character at a time to learn where the word went
+		unsigned w = dic_nr_words++;
+		dic_words[w].idx = dic;
+		dic_words[w].nr = 0;
+		const unsigned space = mem_get_sysvar16(mes_sysvar16_char_space);
+		const unsigned h = mem_get_sysvar16(mes_sysvar16_font_height);
+		bool lead = true;
+		size_t word_len = 0;
+		{
+			const char *m = hh_dic[dic].match; // only for prefix matches: limit to the word
+			const char *end = strchr(m, '|');
+			size_t n = end ? (size_t)(end - m) : strlen(m);
+			if (n && m[n - 1] == '*')
+				word_len = n - 1; // UTF-8 bytes of the word
+		}
+		size_t done_utf8 = 0;
+		for (const char *p = text; *p; ) {
+			char one[4] = {0};
+			bool two = ai5_char_is_2byte(*p) && p[1];
+			one[0] = p[0];
+			if (two)
+				one[1] = p[1];
+			p += two ? 2 : 1;
+			vm_draw_text(one, 1);
+			bool is_space = !two && one[0] == ' ';
+			if (lead && is_space)
+				continue;
+			lead = false;
+			if (word_len && done_utf8 >= word_len)
+				continue;
+			done_utf8 += two ? 3 : 1;
+			unsigned cw = two ? space : space / 2;
+			int x = (int)mem_get_sysvar16(mes_sysvar16_text_cursor_x) - (int)cw;
+			int y = mem_get_sysvar16(mes_sysvar16_text_cursor_y);
+			if (dic_words[w].nr < DIC_MAX_CHARS)
+				dic_words[w].r[dic_words[w].nr++] = (SDL_Rect) { x, y, cw, h };
+		}
+	}
 	if (msgwin_visible && mem_get_sysvar16(mes_sysvar16_dst_surface) == MSGWIN_SURFACE)
 		msgwin_compose();
 }
@@ -4554,6 +4785,7 @@ static void util_system_menu(void)
 		{ "가진 도구 보기", 6 },
 		{ "상태 보기", 7 },
 		{ "환경 설정", 8 },
+		{ "용어 사전", 100 },
 		{ "타이틀로 돌아가기", 9 },
 		{ "게임 종료", 10 },
 		{ "돌아가기", 11 },
@@ -4561,8 +4793,15 @@ static void util_system_menu(void)
 	const char *text[ARRAY_SIZE(items)];
 	for (unsigned i = 0; i < ARRAY_SIZE(items); i++)
 		text[i] = items[i].text;
-	int r = choice_run(text, ARRAY_SIZE(items));
-	unsigned code = r < 0 ? 11 : items[r].code;
+	int r;
+	unsigned code;
+	while (true) {
+		r = choice_run(text, ARRAY_SIZE(items));
+		code = r < 0 ? 11 : items[r].code;
+		if (code != 100)
+			break;
+		dic_list(); // ours: the dictionary as a list (not a script menu code)
+	}
 	if ((code == 9 || code == 10) && !confirm(code == 9 ? "타이틀로 돌아갈까요?" : "게임을 끝낼까요?"))
 		code = 11;
 	mem_set_var16(18, code);
@@ -4600,7 +4839,7 @@ static unsigned title_buttons(unsigned menu, struct title_button *b)
 		b[n++] = (struct title_button) { 0x205, 0xdc, 0x1a8, 0x168, true };
 		int y = 0x178;
 		for (int i = 4; i >= 0; i--) {
-			if (v4[5100 + i] != 1)
+			if (v4[5100 + i] != 1 && !hh_unlock_all())
 				continue;
 			b[n++] = (struct title_button) { 0x200 + i, 0xdc, y, 0xa0 + i * 0x28, true };
 			y -= 0x30;
@@ -4861,11 +5100,8 @@ static const char *cg_list_names[10] = {
 
 static bool var4_set(uint32_t i)
 {
-	// debugging: HH_DEBUG_UNLOCK=1 shows every CG
-	static int unlock = -1;
-	if (unlock < 0)
-		unlock = getenv("HH_DEBUG_UNLOCK") != NULL;
-	if (unlock)
+	// HH_DEBUG_UNLOCK=1 or the setting "회상·감상 전부 열기" shows every CG
+	if (hh_unlock_all())
 		return true;
 	return i < VAR4_SIZE && memory_raw[VAR4_OFF + i] == 1;
 }
@@ -5145,7 +5381,7 @@ static const char *ending_tabs[6] = { "시즈코", "케이코", "쿄코", "미�
 
 static bool flag_seen(uint16_t f)
 {
-	if (getenv("HH_DEBUG_UNLOCK"))
+	if (hh_unlock_all())
 		return true;
 	return f < VAR4_SIZE && memory_raw[VAR4_OFF + f] != 0;
 }
