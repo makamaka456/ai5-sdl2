@@ -1377,17 +1377,39 @@ static const char *map_room_name(int room)
 static char map_steps[4][32];
 static bool map_custom_steps = false;
 
+/*
+ * Footsteps (HH2D.exe 0x403170): one kind by floor, alternating left/right:
+ * byte 0x708 == 1 -> hh_181(a), else byte 0x864 == 0 -> hh_179(a), else
+ * hh_180(a); none if byte 0x709 != 0. Steps set with Util 1041 (0x864 == 0:
+ * the 1st/2nd name, else the 3rd/4th) play instead.
+ */
 static void map_footstep(void)
 {
 	static unsigned n = 0;
-	static const char *steps[] = { "hh_179.wav", "hh_180.wav", "hh_181.wav" };
+	unsigned alt = n++ & 1;
 	if (!setting_enabled("Se", "IsSe"))
 		return;
-	if (map_custom_steps)
-		audio_se_play(map_steps[n++ % 4], 1);
-	else
-		audio_se_play(steps[n++ % 3], 1);
-	apply_volume(AUDIO_CH_SE(1), "Effect");
+	if (map_custom_steps) {
+		// the original plays these on another channel as well; we have
+		// three SE channels (0 script, 1 steps, 2 ambient): play instead
+		audio_se_play(map_steps[(memory_raw[0x864] ? 2 : 0) + alt], 1);
+		apply_volume(AUDIO_CH_SE(1), "Effect");
+		return;
+	}
+	if (!memory_raw[0x709]) {
+		const char *base = memory_raw[0x708] == 1 ? "hh_181" : !memory_raw[0x864] ? "hh_179" : "hh_180";
+		char name[32];
+		snprintf(name, sizeof(name), "%s%s.wav", base, alt ? "a" : "");
+		audio_se_play(name, 1);
+		apply_volume(AUDIO_CH_SE(1), "Effect");
+	}
+}
+
+// time per step: AI5WIN.INI [OPTION] MSpeed=1 -> 256 ms, else 128 ms
+static unsigned map_step_ms(void)
+{
+	const char *v = config_ini_get("OPTION", "MSpeed");
+	return !v || atoi(v) == 1 ? 256 : 128;
 }
 
 /*
@@ -1962,8 +1984,12 @@ static void util_map_select(void)
 		}
 		if (action != MW_NONE && action < MW_SPOT) {
 			last = -2;
-			// keep moving while an arrow key is held (with a short pause)
-			vm_delay(action == MW_LEFT || action == MW_RIGHT ? 120 : 90);
+			// keep moving while an arrow key is held: the original waits
+			// MSpeed time per step (Shift: no wait)
+			unsigned ms = action == MW_LEFT || action == MW_RIGHT ? 120 : map_step_ms();
+			ms = ms > 80 ? ms - 80 : 0; // the pressed picture took 80 ms
+			for (uint32_t t0 = SDL_GetTicks(); SDL_GetTicks() - t0 < ms && !input_down(INPUT_SHIFT); )
+				vm_delay(8);
 		}
 		vm_peek();
 		vm_delay(16);
