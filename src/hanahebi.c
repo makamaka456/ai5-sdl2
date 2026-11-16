@@ -2275,6 +2275,63 @@ static void util_staff_roll(unsigned which)
 	// HH2D.exe does not set a result
 }
 
+/*
+ * Util 1027 (escape ending, FAS_ENDESC.MES; HH2D.exe 0x474540 class):
+ * tanuki.a6 is a 640x480 area map over the picture the script has drawn;
+ * hovering lights an area up, clicking one ends with var32[18] = 1 for
+ * area 0 (the right place) and 0 for the others.
+ */
+static void util_tanuki(void)
+{
+	struct archive_data *a6 = asset_data_load("tanuki.a6");
+	if (!a6 || a6->size < 640 * 480) {
+		if (a6)
+			archive_data_release(a6);
+		mem_set_var32(18, 1);
+		return;
+	}
+	const uint8_t *areas = a6->data;
+	int last = -2;
+	input_wait_until_up(INPUT_ACTIVATE);
+	while (true) {
+		unsigned cx, cy;
+		cursor_get_pos(&cx, &cy);
+		int hover = cx < 640 && cy < 480 && areas[cy * 640 + cx] != 0xff ? areas[cy * 640 + cx] : -1;
+		if (hover != last) {
+			last = hover;
+			SDL_Surface *ov = gfx_get_overlay(2);
+			SDL_CALL(SDL_FillRect, ov, NULL, SDL_MapRGBA(ov->format, 0, 0, 0, 0));
+			if (hover >= 0) {
+				SDL_LockSurface(ov);
+				uint32_t c = SDL_MapRGBA(ov->format, 255, 255, 255, 60);
+				for (int y = 0; y < 480; y++) {
+					uint32_t *d = (uint32_t*)((uint8_t*)ov->pixels + y * ov->pitch);
+					for (int x = 0; x < 640; x++)
+						if (areas[y * 640 + x] == hover)
+							d[x] = c;
+				}
+				SDL_UnlockSurface(ov);
+			}
+			gfx_overlay_enable(2);
+			gfx_screen_dirty();
+		}
+		if (input_down(INPUT_ACTIVATE)) {
+			cursor_get_pos(&cx, &cy);
+			input_wait_until_up(INPUT_ACTIVATE);
+			int v = cx < 640 && cy < 480 ? areas[cy * 640 + cx] : 0xff;
+			if (v != 0xff) {
+				mem_set_var32(18, v == 0 ? 1 : 0);
+				break;
+			}
+		}
+		vm_peek();
+		vm_delay(16);
+	}
+	archive_data_release(a6);
+	gfx_overlay_disable(2);
+	gfx_screen_dirty();
+}
+
 static void hanahebi_util(struct param_list *params)
 {
 	if (getenv("HH_DEBUG_UTIL") && vm_expr_param(params, 0) != 9000 && vm_expr_param(params, 0) != 504) {
@@ -2312,6 +2369,7 @@ static void hanahebi_util(struct param_list *params)
 		mem_set_var16(5, speed[i < 4 ? i : 1]);
 		break;
 	}
+	case 20: // (HH2D.exe: another mask wipe; the scripts never reach it)
 	case 21: { // mask wipe from the back buffer: (21, x, y, w, h, mask no, ?)
 		char name[16];
 		snprintf(name, sizeof(name), "%02u.msk", (unsigned)param_or(params, 5, 0));
@@ -2509,6 +2567,11 @@ static void hanahebi_util(struct param_list *params)
 		break;
 	case 30000:
 		util_staff_roll(param_or(params, 1, 0));
+		break;
+	case 1027:
+		util_tanuki();
+		break;
+	case 1031: case 1040: // not handled by HH2D.exe
 		break;
 	case 1200: // can examine spot n be used? (HH2D.exe 0x4012e0)
 		if (!map.have_itm)
