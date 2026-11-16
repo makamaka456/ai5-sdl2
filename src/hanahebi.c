@@ -2395,18 +2395,16 @@ static const struct { const char *label, *section, *key; int min, max, def; } hh
 	{ "자동 진행 빠르기", "MsgMode", "Speed", 0, 9, 5 },
 	{ "자동 진행", "MsgMode", "AutoMes", 0, 1, 0 },
 	{ "화면 효과 속도", "DispEffect", "Play", 0, 3, 1 },
-	// ours (not in the original): every CG / scene / ending / free training open
-	{ "회상·감상 전부 열기", "HHLauncher", "OpenAll", 0, 1, 1 },
 };
 
 static bool hh_unlock_all(void)
 {
 	if (getenv("HH_DEBUG_UNLOCK"))
 		return true;
-	// on unless turned off in the settings (the user wants every replay
-	// available from the start, for checking)
-	const char *v = config_ini_get("HHLauncher", "OpenAll");
-	return !v || atoi(v) == 1;
+	// every replay open from the start unless the launcher turns it off
+	// (AI5_OPEN_ALL=0, set in the launcher's settings / the game's ⚙)
+	const char *v = getenv("AI5_OPEN_ALL");
+	return !v || strcmp(v, "0") != 0;
 }
 
 static int hh_opt_get(unsigned i)

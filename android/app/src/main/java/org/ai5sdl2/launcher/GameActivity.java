@@ -88,6 +88,7 @@ public class GameActivity extends SDLActivity {
     private void applyDisplaySettings() {
         nativeSetenv("AI5_STRETCH", AppSettings.stretch(this, gameId()) ? "1" : "0");
         nativeSetenv("AI5_BACKGROUND", AppSettings.backgroundEnv(this, gameId()));
+        nativeSetenv("AI5_OPEN_ALL", AppSettings.openAll(this, gameId()) ? "1" : "0");
     }
 
     private void applyPadSettings() {
@@ -162,7 +163,102 @@ public class GameActivity extends SDLActivity {
         return editing && stage.containsKey(id) ? stage.get(id) : savedCfg(id);
     }
 
+    // on-screen direction stick: a ring with a knob; drags press the arrow keys
+    private class StickButton extends Button {
+        float kx, ky; // knob offset (-1..1)
+
+        StickButton() {
+            super(GameActivity.this);
+        }
+
+        @Override
+        protected void onDraw(android.graphics.Canvas cv) {
+            float w = getWidth(), h = getHeight(), r = Math.min(w, h) / 2f;
+            android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+            p.setColor(0xAA000000);
+            cv.drawCircle(w / 2, h / 2, r - dp(2), p);
+            p.setStyle(android.graphics.Paint.Style.STROKE);
+            p.setStrokeWidth(dp(3));
+            p.setColor(0xFFC03030);
+            cv.drawCircle(w / 2, h / 2, r - dp(3), p);
+            p.setStyle(android.graphics.Paint.Style.FILL);
+            p.setColor(0xFFE0E0E0);
+            float kr = r * 0.38f;
+            cv.drawCircle(w / 2 + kx * (r - kr), h / 2 + ky * (r - kr), kr, p);
+        }
+    }
+
+    private final boolean[] stickKeys = new boolean[4]; // up, down, left, right
+    private static final int[] STICK_CODES = {
+        KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
+        KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
+    };
+
+    private void setStickKeys(boolean up, boolean down, boolean left, boolean right) {
+        boolean[] want = { up, down, left, right };
+        for (int i = 0; i < 4; i++) {
+            if (want[i] != stickKeys[i]) {
+                stickKeys[i] = want[i];
+                if (want[i])
+                    onNativeKeyDown(STICK_CODES[i]);
+                else
+                    onNativeKeyUp(STICK_CODES[i]);
+            }
+        }
+    }
+
+    private boolean stickTouch(StickButton v, MotionEvent e) {
+        float r = Math.min(v.getWidth(), v.getHeight()) / 2f;
+        float dx = (e.getX() - v.getWidth() / 2f) / r, dy = (e.getY() - v.getHeight() / 2f) / r;
+        float len = (float) Math.sqrt(dx * dx + dy * dy);
+        switch (e.getActionMasked()) {
+        case MotionEvent.ACTION_DOWN:
+        case MotionEvent.ACTION_MOVE:
+            if (len > 1) {
+                dx /= len;
+                dy /= len;
+            }
+            v.kx = dx;
+            v.ky = dy;
+            // 8 directions; a dead zone in the middle
+            boolean on = len > 0.3f;
+            double ang = Math.atan2(dy, dx); // 0 = right, pi/2 = down
+            boolean right = on && Math.abs(ang) < Math.PI * 3 / 8;
+            boolean left = on && Math.abs(ang) > Math.PI * 5 / 8;
+            boolean down = on && ang > Math.PI / 8 && ang < Math.PI * 7 / 8;
+            boolean up = on && ang < -Math.PI / 8 && ang > -Math.PI * 7 / 8;
+            setStickKeys(up, down, left, right);
+            break;
+        case MotionEvent.ACTION_UP:
+        case MotionEvent.ACTION_CANCEL:
+            v.kx = v.ky = 0;
+            setStickKeys(false, false, false, false);
+            break;
+        }
+        v.invalidate();
+        return true;
+    }
+
     private Button makeButton(String id, String text, BtnCfg c) {
+        if (id.equals("stick")) {
+            StickButton b = new StickButton();
+            b.setTag(id);
+            b.setText("");
+            int d = dp(120 * c.size / 100f);
+            b.setMinWidth(d);
+            b.setMinHeight(d);
+            b.setMinimumWidth(d);
+            b.setMinimumHeight(d);
+            b.setWidth(d);
+            b.setHeight(d);
+            b.setBackground(null);
+            boolean sel = editing && id.equals(selected);
+            if (editing)
+                b.setAlpha(c.hidden ? 0.3f : (sel ? 1.0f : 0.85f));
+            else
+                b.setAlpha(c.alpha / 100f);
+            return b;
+        }
         Button b = new Button(this);
         b.setText(text);
         b.setTag(id);
@@ -292,6 +388,8 @@ public class GameActivity extends SDLActivity {
     private boolean dragTouch(View v, MotionEvent e) {
         String id = (String) v.getTag();
         if (!editing) {
+            if (v instanceof StickButton)
+                return stickTouch((StickButton) v, e);
             int key = holdKey(id);
             if (key == 0)
                 return false;
@@ -571,10 +669,14 @@ public class GameActivity extends SDLActivity {
     // ------------------------------------------------------------ settings (⚙)
 
     private void showSettings() {
+        boolean oa = AppSettings.openAll(this, gameId());
+        boolean hasOa = AppSettings.supportsOpenAll(gameId());
         String[] items = {
             "🖥  화면 설정",
-            "🔘  가상 버튼 (위치·크기·투명도·숨기기)",
+            "🔘  가상 버튼 (위치·크기·투명도·표시할 버튼)",
             "🎮  키맵핑 (게임패드)",
+            hasOa ? "🔓  회상·감상 처음부터 열기: " + (oa ? "켜짐" : "꺼짐") + "  (누르면 바꾸기)"
+                  : "🔓  회상·감상 처음부터 열기: 이 게임은 아직 지원 안 함",
             "⏻  게임 끝내기",
         };
         new AlertDialog.Builder(this)
@@ -585,6 +687,13 @@ public class GameActivity extends SDLActivity {
                     case 1: startEditing(); break;
                     case 2: AppSettings.padSettings(this, gameId(), this::applyPadSettings); break;
                     case 3:
+                        if (hasOa) {
+                            AppSettings.setOpenAll(this, gameId(), !oa);
+                            applyDisplaySettings();
+                        }
+                        showSettings();
+                        break;
+                    case 4:
                         new AlertDialog.Builder(this)
                                 .setMessage("게임을 끝낼까요? 저장하지 않은 진행은 사라집니다.")
                                 .setPositiveButton("끝내기", (d2, w) -> quitGame())
@@ -678,6 +787,7 @@ public class GameActivity extends SDLActivity {
     protected void onPause() {
         if (ctrlHeld)
             setSkip(false);
+        setStickKeys(false, false, false, false);
         super.onPause();
     }
 

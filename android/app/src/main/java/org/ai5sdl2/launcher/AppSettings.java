@@ -58,6 +58,20 @@ final class AppSettings {
         prefs(c).edit().putBoolean(gk(game, "stretch"), on).commit();
     }
 
+    // replays / CG / endings open from the start (AI5_OPEN_ALL; default on)
+    static boolean openAll(Context c, String game) {
+        return prefs(c).getBoolean(gk(game, "openall"), true);
+    }
+
+    static void setOpenAll(Context c, String game, boolean on) {
+        prefs(c).edit().putBoolean(gk(game, "openall"), on).commit();
+    }
+
+    // games whose engine module supports AI5_OPEN_ALL
+    static boolean supportsOpenAll(String game) {
+        return game.equals("hanahebi");
+    }
+
     // value for AI5_BACKGROUND: path + "#" + version so a new picture under
     // the same file name is loaded again
     static String backgroundEnv(Context c, String gameId) {
@@ -79,6 +93,7 @@ final class AppSettings {
         { "left",   "◀",         "left",  "0.75", "1", "0.06" },
         { "right",  "▶",         "left",  "0.75", "1", "0.20" },
         { "down",   "▼",         "left",  "0.88", "1", "0.13" },
+        { "stick",  "",           "left",  "0.72", "1", "0.14" },
     };
     // longer names for lists
     static final String[][] VBUTTON_NAMES = {
@@ -86,7 +101,7 @@ final class AppSettings {
         { "enter", "결정 (Enter)" }, { "gear", "⚙ 설정" }, { "hide", "대사창 숨기기 (Space)" },
         { "log", "지난 대사 (Backspace)" }, { "shift", "화면 효과 빨리 (Shift)" },
         { "up", "방향키 위 ▲" }, { "left", "방향키 왼쪽 ◀" }, { "right", "방향키 오른쪽 ▶" },
-        { "down", "방향키 아래 ▼" },
+        { "down", "방향키 아래 ▼" }, { "stick", "방향 스틱 (끌어서 방향키)" },
     };
 
     static String[] vbutton(String id) {

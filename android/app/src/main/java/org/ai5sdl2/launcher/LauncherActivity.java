@@ -443,6 +443,9 @@ public class LauncherActivity extends Activity {
             "가상 버튼: 표시할 버튼 고르기  (지금 " + shown + "개)",
             "가상 버튼: 위치·크기·투명도 처음대로",
             "키맵핑 (게임패드)",
+            AppSettings.supportsOpenAll(id)
+                    ? "회상·감상 처음부터 열기: " + (AppSettings.openAll(this, id) ? "켜짐" : "꺼짐") + "  (누르면 바꾸기)"
+                    : "회상·감상 처음부터 열기: 이 게임은 아직 지원 안 함",
         };
         new AlertDialog.Builder(this)
                 .setTitle(GAMES[game][1] + " 설정")
@@ -488,6 +491,11 @@ public class LauncherActivity extends Activity {
                         break;
                     case 5:
                         AppSettings.padSettings(this, id, null);
+                        break;
+                    case 6:
+                        if (AppSettings.supportsOpenAll(id))
+                            AppSettings.setOpenAll(this, id, !AppSettings.openAll(this, id));
+                        gameSettings(game);
                         break;
                     }
                 })
