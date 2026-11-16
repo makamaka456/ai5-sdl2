@@ -36,6 +36,7 @@ extern int gfx_display_offset_x;
 extern int gfx_display_offset_y;
 void gfx_dirty(unsigned surface, int x, int y, int w, int h);
 void gfx_screen_dirty(void);
+void gfx_check_display_env(void);
 void gfx_whole_surface_dirty(unsigned surface);
 bool gfx_is_dirty(unsigned surface);
 void gfx_clean(unsigned surface);

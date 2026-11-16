@@ -434,8 +434,15 @@ static void gfx_load_background(const char *path)
 	}
 	if (!path || !*path)
 		return;
+	// "path#version": the launcher adds a version so that a new picture
+	// saved under the same name is loaded again
+	char file[1024];
+	snprintf(file, sizeof(file), "%s", path);
+	char *hash = strrchr(file, '#');
+	if (hash)
+		*hash = '\0';
 	size_t size;
-	uint8_t *data = file_read(path, &size);
+	uint8_t *data = file_read(file, &size);
 	if (!data)
 		return;
 	struct cg *cg = cg_load(data, size, CG_TYPE_PNG);
@@ -449,6 +456,23 @@ static void gfx_load_background(const char *path)
 	bg_w = cg->metrics.w;
 	bg_h = cg->metrics.h;
 	cg_free(cg);
+}
+
+/*
+ * The launcher changes AI5_STRETCH / AI5_BACKGROUND while the game runs:
+ * redraw the whole screen as soon as they change (not only at the next
+ * screen update of the game). Called from the event loop.
+ */
+void gfx_check_display_env(void)
+{
+	static char last[1100] = "";
+	char now[1100];
+	const char *st = getenv("AI5_STRETCH"), *bg = getenv("AI5_BACKGROUND");
+	snprintf(now, sizeof(now), "%s|%s", st ? st : "", bg ? bg : "");
+	if (strcmp(now, last)) {
+		snprintf(last, sizeof(last), "%s", now);
+		gfx_screen_dirty();
+	}
 }
 
 // draw the background picture over the whole screen (cropped to fill it)

@@ -26,6 +26,7 @@ import android.widget.SeekBar;
 import android.widget.TextView;
 
 import org.libsdl.app.SDLActivity;
+import org.ai5sdl2.launcher.AppSettings.BtnCfg;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -36,47 +37,7 @@ public class GameActivity extends SDLActivity {
     public static final String EXTRA_GAME = "game";
     private static final int REQ_IMAGE = 10;
 
-    // on-screen buttons: id, label, default side, default y (fraction of the screen), hidden by default
-    private static final String[][] BUTTONS = {
-        { "menu",  "메뉴",      "right", "0.22", "0" },
-        { "skip",  "넘기기",    "right", "0.42", "0" },
-        { "gear",  "⚙",        "right", "0.78", "0" },
-        { "hide",  "숨기기",    "left",  "0.30", "0" },
-        { "log",   "지난 대사", "left",  "0.55", "0" },
-        { "enter", "결정",      "right", "0.62", "1" },
-        { "shift", "효과 빨리", "left",  "0.80", "1" },
-    };
-
-    // settings of one button (position as a fraction of the screen, -1 = default)
-    private static class BtnCfg {
-        float x = -1, y = -1;
-        int alpha = 70;     // 10..100 %
-        int size = 100;     // 60..200 %
-        boolean hidden;
-
-        BtnCfg copy() {
-            BtnCfg c = new BtnCfg();
-            c.x = x; c.y = y; c.alpha = alpha; c.size = size; c.hidden = hidden;
-            return c;
-        }
-
-        String serialize() {
-            return x + "," + y + "," + alpha + "," + size + "," + (hidden ? 1 : 0);
-        }
-
-        static BtnCfg parse(String v, BtnCfg def) {
-            BtnCfg c = def.copy();
-            try {
-                String[] f = v.split(",");
-                c.x = Float.parseFloat(f[0]); c.y = Float.parseFloat(f[1]);
-                c.alpha = Integer.parseInt(f[2]); c.size = Integer.parseInt(f[3]);
-                c.hidden = f[4].equals("1");
-            } catch (Exception e) {
-                // keep defaults
-            }
-            return c;
-        }
-    }
+    private static final String[][] BUTTONS = AppSettings.VBUTTONS;
 
     private FrameLayout overlay;
     private final ArrayList<Button> buttons = new ArrayList<>();
@@ -90,7 +51,6 @@ public class GameActivity extends SDLActivity {
     private LinearLayout editBar, editPanel;
     private TextView panelTitle;
     private SeekBar alphaBar, sizeBar;
-    private CheckBox hideBox;
     private boolean panelUpdating;
 
     private String gameId() {
@@ -126,12 +86,12 @@ public class GameActivity extends SDLActivity {
 
     // the engine reads these every frame, so changes apply at once
     private void applyDisplaySettings() {
-        nativeSetenv("AI5_STRETCH", AppSettings.stretch(this) ? "1" : "0");
-        nativeSetenv("AI5_BACKGROUND", AppSettings.backgroundPath(this, gameId()));
+        nativeSetenv("AI5_STRETCH", AppSettings.stretch(this, gameId()) ? "1" : "0");
+        nativeSetenv("AI5_BACKGROUND", AppSettings.backgroundEnv(this, gameId()));
     }
 
     private void applyPadSettings() {
-        nativeSetenv("AI5_CONTROLLER", AppSettings.controllerConfig(this));
+        nativeSetenv("AI5_CONTROLLER", AppSettings.controllerConfig(this, gameId()));
     }
 
     @Override
@@ -187,34 +147,15 @@ public class GameActivity extends SDLActivity {
     }
 
     private static String[] def(String id) {
-        for (String[] d : BUTTONS) {
-            if (d[0].equals(id))
-                return d;
-        }
-        return BUTTONS[0];
+        return AppSettings.vbutton(id);
     }
 
     private static BtnCfg defaultCfg(String id) {
-        BtnCfg c = new BtnCfg();
-        c.hidden = def(id)[4].equals("1");
-        return c;
+        return AppSettings.defaultBtn(id);
     }
 
-    // saved settings of a button (older versions kept global size/alpha)
     private BtnCfg savedCfg(String id) {
-        SharedPreferences p = prefs();
-        String v = p.getString("btn." + id, null);
-        if (v != null)
-            return BtnCfg.parse(v, defaultCfg(id));
-        BtnCfg c = defaultCfg(id);
-        c.x = p.getFloat("btn.pos." + id + ".x", -1);
-        c.y = p.getFloat("btn.pos." + id + ".y", -1);
-        c.alpha = p.getInt("btn.alpha", 70);
-        float[] sizes = { 80, 100, 130, 160 };
-        c.size = (int) sizes[Math.max(0, Math.min(3, p.getInt("btn.size", 1)))];
-        if (id.equals("enter") || id.equals("shift"))
-            c.hidden = !p.getBoolean("btn.extra", false);
-        return c;
+        return AppSettings.btnCfg(this, gameId(), id);
     }
 
     private BtnCfg cfg(String id) {
@@ -251,6 +192,19 @@ public class GameActivity extends SDLActivity {
     private static void tapKey(int keycode) {
         onNativeKeyDown(keycode);
         onNativeKeyUp(keycode);
+    }
+
+    // buttons that act while held (key down on touch, key up on release)
+    private static int holdKey(String id) {
+        switch (id) {
+        case "up":    return KeyEvent.KEYCODE_DPAD_UP;
+        case "down":  return KeyEvent.KEYCODE_DPAD_DOWN;
+        case "left":  return KeyEvent.KEYCODE_DPAD_LEFT;
+        case "right": return KeyEvent.KEYCODE_DPAD_RIGHT;
+        case "pgup":  return KeyEvent.KEYCODE_PAGE_UP;
+        case "pgdn":  return KeyEvent.KEYCODE_PAGE_DOWN;
+        }
+        return 0;
     }
 
     private void onButton(String id) {
@@ -309,12 +263,20 @@ public class GameActivity extends SDLActivity {
             String id = (String) b.getTag();
             String[] d = def(id);
             BtnCfg c = cfg(id);
+            // a new button may not be laid out yet: measure it ourselves
+            // (with width 0 the right-hand buttons ended up off screen)
+            if (b.getWidth() <= 0 || b.getHeight() <= 0)
+                b.measure(View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.AT_MOST),
+                        View.MeasureSpec.makeMeasureSpec(h, View.MeasureSpec.AT_MOST));
             int bw = b.getWidth() > 0 ? b.getWidth() : b.getMeasuredWidth();
             int bh = b.getHeight() > 0 ? b.getHeight() : b.getMeasuredHeight();
             float x, y;
             if (c.x >= 0 && c.y >= 0) {
                 x = c.x * w - bw / 2f;
                 y = c.y * h - bh / 2f;
+            } else if (!d[5].isEmpty()) {
+                x = Float.parseFloat(d[5]) * w - bw / 2f;
+                y = Float.parseFloat(d[3]) * h - bh / 2f;
             } else {
                 x = d[2].equals("left") ? margin : w - bw - margin;
                 y = Float.parseFloat(d[3]) * h - bh / 2f;
@@ -330,9 +292,24 @@ public class GameActivity extends SDLActivity {
     private boolean dragged;
 
     private boolean dragTouch(View v, MotionEvent e) {
-        if (!editing)
-            return false;
         String id = (String) v.getTag();
+        if (!editing) {
+            int key = holdKey(id);
+            if (key == 0)
+                return false;
+            switch (e.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+                v.setPressed(true);
+                onNativeKeyDown(key);
+                break;
+            case MotionEvent.ACTION_UP:
+            case MotionEvent.ACTION_CANCEL:
+                v.setPressed(false);
+                onNativeKeyUp(key);
+                break;
+            }
+            return true;
+        }
         switch (e.getActionMasked()) {
         case MotionEvent.ACTION_DOWN:
             dragDX = v.getX() - e.getRawX();
@@ -406,6 +383,17 @@ public class GameActivity extends SDLActivity {
         ((GradientDrawable) apply.getBackground()).setColor(0xFFB02828);
         editBar.addView(apply);
         editBar.addView(barButton("취소", v -> cancelEditing()));
+        editBar.addView(barButton("표시할 버튼", v -> {
+            boolean[] shown = new boolean[BUTTONS.length];
+            for (int i = 0; i < BUTTONS.length; i++)
+                shown[i] = !stage.get(BUTTONS[i][0]).hidden;
+            AppSettings.chooseVisible(this, shown, () -> {
+                for (int i = 0; i < BUTTONS.length; i++)
+                    stage.get(BUTTONS[i][0]).hidden = !shown[i] && !BUTTONS[i][0].equals("gear");
+                buildButtons();
+                updatePanel();
+            });
+        }));
         editBar.addView(barButton("프리셋 저장", v -> AppSettings.askName(this, "가상 버튼 프리셋 저장", name ->
                 prefs().edit().putString("btnpreset." + name, serializeStage()).apply())));
         editBar.addView(barButton("프리셋 불러오기", v -> AppSettings.choosePreset(this, "btnpreset.",
@@ -467,10 +455,6 @@ public class GameActivity extends SDLActivity {
         editPanel.addView(row(label("투명도"), alphaBar));
         sizeBar = slider(140);
         editPanel.addView(row(label("크기   "), sizeBar));
-        hideBox = new CheckBox(this);
-        hideBox.setText("이 버튼 숨기기");
-        hideBox.setTextColor(Color.WHITE);
-        editPanel.addView(hideBox);
 
         alphaBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar s, int p, boolean user) {
@@ -493,11 +477,6 @@ public class GameActivity extends SDLActivity {
             }
             @Override public void onStartTrackingTouch(SeekBar s) {}
             @Override public void onStopTrackingTouch(SeekBar s) { buildButtons(); }
-        });
-        hideBox.setOnCheckedChangeListener((v, checked) -> {
-            if (panelUpdating || selected == null) return;
-            stage.get(selected).hidden = checked;
-            buildButtons();
         });
 
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
@@ -526,19 +505,17 @@ public class GameActivity extends SDLActivity {
         panelUpdating = true;
         boolean has = selected != null;
         if (!has) {
-            panelTitle.setText("버튼을 눌러 고르세요. 끌어서 옮길 수 있습니다.\n진한 버튼 = 보임, 연한 버튼 = 숨김");
+            panelTitle.setText("버튼을 눌러 고르면 투명도·크기를 바꿀 수 있고, 끌어서 옮길 수 있습니다.\n"
+                    + "연한 버튼 = 숨겨진 버튼 ([표시할 버튼]에서 고르기)");
         } else {
             BtnCfg c = stage.get(selected);
-            panelTitle.setText("[" + def(selected)[1] + "]  투명도 " + c.alpha + "%  ·  크기 " + c.size + "%");
+            panelTitle.setText("[" + AppSettings.vbuttonName(selected) + "]" + (c.hidden ? " (숨김)" : "")
+                    + "\n투명도 " + c.alpha + "%  ·  크기 " + c.size + "%");
             alphaBar.setProgress(c.alpha - 10);
             sizeBar.setProgress(c.size - 60);
-            hideBox.setChecked(c.hidden);
         }
         alphaBar.setEnabled(has);
         sizeBar.setEnabled(has);
-        // the ⚙ button opens these settings: it can't be hidden
-        hideBox.setEnabled(has && !selected.equals("gear"));
-        hideBox.setText(has && selected.equals("gear") ? "⚙ 버튼은 숨길 수 없습니다" : "이 버튼 숨기기");
         panelUpdating = false;
     }
 
@@ -561,10 +538,8 @@ public class GameActivity extends SDLActivity {
     }
 
     private void applyEditing() {
-        SharedPreferences.Editor e = prefs().edit();
         for (String[] d : BUTTONS)
-            e.putString("btn." + d[0], stage.get(d[0]).serialize());
-        e.apply();
+            AppSettings.saveBtn(this, gameId(), d[0], stage.get(d[0]));
         endEditing();
     }
 
@@ -610,7 +585,7 @@ public class GameActivity extends SDLActivity {
                     switch (which) {
                     case 0: screenSettings(); break;
                     case 1: startEditing(); break;
-                    case 2: AppSettings.padSettings(this, this::applyPadSettings); break;
+                    case 2: AppSettings.padSettings(this, gameId(), this::applyPadSettings); break;
                     case 3:
                         new AlertDialog.Builder(this)
                                 .setMessage("게임을 끝낼까요? 저장하지 않은 진행은 사라집니다.")
@@ -625,19 +600,19 @@ public class GameActivity extends SDLActivity {
     }
 
     private void screenSettings() {
-        boolean stretch = AppSettings.stretch(this);
+        boolean stretch = AppSettings.stretch(this, gameId());
         boolean hasBg = !AppSettings.backgroundPath(this, gameId()).isEmpty();
         String[] items = {
-            "화면 비율:  " + (stretch ? "꽉 채우기  (누르면 → 원래 비율 4:3)" : "원래 비율 4:3  (누르면 → 꽉 채우기)"),
-            hasBg ? "배경화면 바꾸기" : "배경화면 고르기",
+            "화면 비율:  " + (stretch ? "16:9 꽉 채우기  (누르면 → 4:3)" : "4:3 원래 비율  (누르면 → 16:9)"),
+            hasBg ? "배경화면 바꾸기 (4:3일 때 양옆에 보임)" : "배경화면 고르기 (4:3일 때 양옆에 보임)",
             hasBg ? "배경화면 없애기" : "배경화면 없애기  (지금 없음)",
         };
         new AlertDialog.Builder(this)
-                .setTitle("화면 설정")
+                .setTitle("화면 설정 — 바로 적용")
                 .setItems(items, (d, which) -> {
                     switch (which) {
                     case 0:
-                        prefs().edit().putBoolean("stretch", !stretch).apply();
+                        AppSettings.setStretch(this, gameId(), !stretch);
                         applyDisplaySettings();
                         screenSettings();
                         break;
@@ -670,11 +645,8 @@ public class GameActivity extends SDLActivity {
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
         if (req == REQ_IMAGE && res == RESULT_OK && data != null && data.getData() != null) {
-            if (AppSettings.saveBackground(this, gameId(), data.getData())) {
-                // the file name stays the same: clear first so the engine reloads it
-                nativeSetenv("AI5_BACKGROUND", "");
-                overlay.postDelayed(this::applyDisplaySettings, 200);
-            }
+            if (AppSettings.saveBackground(this, gameId(), data.getData()))
+                applyDisplaySettings(); // the value carries the file time: the engine reloads it
         }
     }
 

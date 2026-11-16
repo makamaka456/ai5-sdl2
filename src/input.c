@@ -515,6 +515,7 @@ void handle_events(void)
 	}
 #ifdef __ANDROID__
 	controller_env_apply();
+	gfx_check_display_env();
 #endif
 }
 

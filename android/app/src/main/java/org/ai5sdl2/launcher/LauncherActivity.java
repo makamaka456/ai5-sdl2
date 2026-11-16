@@ -144,19 +144,7 @@ public class LauncherActivity extends Activity {
         permButton.setText("저장소 권한 허용");
         permButton.setOnClickListener(v -> requestStorage());
         row.addView(permButton);
-        CheckBox stretch = new CheckBox(this);
-        stretch.setText("화면 꽉 채우기 (늘리기)");
-        stretch.setTextColor(Color.WHITE);
-        stretch.setChecked(prefs().getBoolean("stretch", true));
-        stretch.setOnCheckedChangeListener((b, on) ->
-                prefs().edit().putBoolean("stretch", on).apply());
-        row.addView(stretch);
         root.addView(row);
-        Button pad = new Button(this);
-        pad.setText("게임패드 버튼 설정");
-        pad.setOnClickListener(v -> AppSettings.padSettings(this, null));
-        root.addView(pad, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT));
 
         ListView list = new ListView(this);
         adapter = new ArrayAdapter<String>(this, android.R.layout.simple_list_item_2,
@@ -187,8 +175,8 @@ public class LauncherActivity extends Activity {
         root.addView(list, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
 
         TextView hint = new TextView(this);
-        hint.setText("길게 누르면 폴더 바꾸기·지정 해제. 게임 중: 터치 = 클릭, 두 손가락 탭·뒤로 가기·[메뉴]"
-                + " = 오른쪽 클릭(메뉴/취소), [넘기기] = 대사 빨리 넘기기.");
+        hint.setText("[설정] = 그 게임의 화면 비율·배경화면·가상 버튼·키맵핑. 길게 누르면 폴더 바꾸기·지정 해제.\n"
+                + "게임 중: 터치 = 클릭, 0.5초 누르기·두 손가락 탭·뒤로 가기 = 오른쪽 클릭(메뉴/취소).");
         hint.setTextColor(0xFF999999);
         hint.setTextSize(12);
         root.addView(hint);
@@ -306,6 +294,7 @@ public class LauncherActivity extends Activity {
             if (!AppSettings.saveBackground(this, GAMES[pickingFor][0], data.getData()))
                 status("그림을 읽을 수 없습니다.");
             adapter.notifyDataSetChanged();
+            gameSettings(pickingFor);
             return;
         }
         if (req != REQ_TREE || res != RESULT_OK || data == null || data.getData() == null
@@ -429,31 +418,80 @@ public class LauncherActivity extends Activity {
         texts.addView(t1);
         texts.addView(t2);
         row.addView(texts, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        Button bg = new Button(this);
-        boolean hasBg = !AppSettings.backgroundPath(this, GAMES[pos][0]).isEmpty();
-        bg.setText(hasBg ? "배경화면 ✓" : "배경화면");
-        bg.setFocusable(false);
-        bg.setOnClickListener(v -> backgroundMenu(pos));
-        row.addView(bg);
+        Button set = new Button(this);
+        set.setText("설정");
+        set.setFocusable(false);
+        set.setOnClickListener(v -> gameSettings(pos));
+        row.addView(set);
         return row;
     }
 
-    private void backgroundMenu(int game) {
+    // settings of one game: screen ratio, background, on-screen buttons, gamepad
+    private void gameSettings(int game) {
         String id = GAMES[game][0];
-        if (AppSettings.backgroundPath(this, id).isEmpty()) {
-            pickImage(game);
-            return;
+        boolean stretch = AppSettings.stretch(this, id);
+        boolean hasBg = !AppSettings.backgroundPath(this, id).isEmpty();
+        int shown = 0;
+        for (String[] d : AppSettings.VBUTTONS) {
+            if (!AppSettings.btnCfg(this, id, d[0]).hidden)
+                shown++;
         }
+        String[] items = {
+            "화면 비율:  " + (stretch ? "16:9 꽉 채우기" : "4:3 원래 비율") + "  (누르면 바꾸기)",
+            hasBg ? "배경화면 바꾸기 (4:3일 때 양옆)" : "배경화면 고르기 (4:3일 때 양옆)",
+            hasBg ? "배경화면 없애기" : "배경화면 없애기  (지금 없음)",
+            "가상 버튼: 표시할 버튼 고르기  (지금 " + shown + "개)",
+            "가상 버튼: 위치·크기·투명도 처음대로",
+            "키맵핑 (게임패드)",
+        };
         new AlertDialog.Builder(this)
-                .setTitle(GAMES[game][1] + " 배경화면")
-                .setItems(new String[] { "다른 그림으로 바꾸기", "배경화면 없애기" }, (d, which) -> {
-                    if (which == 0) {
+                .setTitle(GAMES[game][1] + " 설정")
+                .setItems(items, (d, which) -> {
+                    switch (which) {
+                    case 0:
+                        AppSettings.setStretch(this, id, !stretch);
+                        gameSettings(game);
+                        break;
+                    case 1:
                         pickImage(game);
-                    } else {
+                        break;
+                    case 2:
                         AppSettings.clearBackground(this, id);
-                        adapter.notifyDataSetChanged();
+                        gameSettings(game);
+                        break;
+                    case 3: {
+                        String[][] b = AppSettings.VBUTTONS;
+                        boolean[] on = new boolean[b.length];
+                        for (int i = 0; i < b.length; i++)
+                            on[i] = !AppSettings.btnCfg(this, id, b[i][0]).hidden;
+                        AppSettings.chooseVisible(this, on, () -> {
+                            for (int i = 0; i < b.length; i++) {
+                                AppSettings.BtnCfg c = AppSettings.btnCfg(this, id, b[i][0]);
+                                c.hidden = !on[i] && !b[i][0].equals("gear");
+                                AppSettings.saveBtn(this, id, b[i][0], c);
+                            }
+                            gameSettings(game);
+                        });
+                        break;
+                    }
+                    case 4:
+                        new AlertDialog.Builder(this)
+                                .setMessage("가상 버튼의 위치·크기·투명도·표시를 처음대로 되돌릴까요?\n"
+                                        + "(자세한 위치 조정은 게임 중 ⚙ → 가상 버튼에서 끌어서 합니다)")
+                                .setPositiveButton("되돌리기", (d2, w) -> {
+                                    for (String[] bd : AppSettings.VBUTTONS)
+                                        AppSettings.saveBtn(this, id, bd[0], AppSettings.defaultBtn(bd[0]));
+                                    gameSettings(game);
+                                })
+                                .setNegativeButton("취소", (d2, w) -> gameSettings(game))
+                                .show();
+                        break;
+                    case 5:
+                        AppSettings.padSettings(this, id, null);
+                        break;
                     }
                 })
+                .setNegativeButton("닫기", null)
                 .show();
     }
 
