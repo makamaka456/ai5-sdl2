@@ -23,6 +23,7 @@
  */
 
 #include <math.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -2501,6 +2502,108 @@ static void util_tanuki(void)
 	gfx_screen_dirty();
 }
 
+
+/*
+ * Draw text segments onto an RGBA overlay with a dark outline (Korean
+ * replacements for notice pictures that only exist in Japanese).
+ * Segments: text, color, ... NULL. cx < 0: start at x = -cx, else centered on cx.
+ */
+static void ov_text(SDL_Surface *ov, int cx, int y, int size, ...)
+{
+	struct { const char *t; uint32_t c; } seg[8];
+	unsigned n = 0;
+	va_list ap;
+	va_start(ap, size);
+	const char *t;
+	while (n < 8 && (t = va_arg(ap, const char*))) {
+		seg[n].t = t;
+		seg[n++].c = va_arg(ap, uint32_t);
+	}
+	va_end(ap);
+
+	gfx_text_set_size(size, 0);
+	int tw = 0;
+	for (unsigned i = 0; i < n; i++)
+		tw += text_width(seg[i].t);
+	int x0 = cx < 0 ? -cx : cx - tw / 2;
+	// coverage of each segment: render white on black into the work surface
+	uint32_t old_bg, old_fg;
+	gfx_text_get_colors(&old_bg, &old_fg);
+	gfx_fill(0, 0, 640, 480, WORK_SURFACE, 0);
+	gfx_text_set_colors(0, 0xffffff);
+	int bounds[9];
+	int x = 4;
+	for (unsigned i = 0; i < n; i++) {
+		bounds[i] = x;
+		for (const char *p = seg[i].t; *p; ) {
+			int ch;
+			p = utf8_next(p, &ch);
+			x += gfx_text_draw_glyph(x, 4, WORK_SURFACE, ch);
+		}
+	}
+	bounds[n] = x;
+	int h = size + 8, w = x + 4;
+	if (w > 640)
+		w = 640;
+	SDL_Surface *ws = SDL_ConvertSurfaceFormat(gfx_get_surface(WORK_SURFACE), SDL_PIXELFORMAT_RGB24, 0);
+	SDL_LockSurface(ov);
+	for (int pass = 0; pass < 2; pass++) {
+		for (int yy = 0; yy < h; yy++) {
+			for (int xx = 0; xx < w; xx++) {
+				int a = 0;
+				if (pass == 0) {
+					for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) {
+						int sx = xx + dx, sy = yy + dy;
+						if (sx < 0 || sy < 0 || sx >= w || sy >= h)
+							continue;
+						a = max(a, ((uint8_t*)ws->pixels)[sy * ws->pitch + sx * 3]);
+					}
+				} else {
+					a = ((uint8_t*)ws->pixels)[yy * ws->pitch + xx * 3];
+				}
+				if (!a)
+					continue;
+				int px = x0 - 4 + xx, py = y - 4 + yy;
+				if (px < 0 || py < 0 || px >= ov->w || py >= ov->h)
+					continue;
+				uint32_t c = 0x100404;
+				if (pass) {
+					unsigned i = 0;
+					while (i + 1 < n && xx >= bounds[i + 1])
+						i++;
+					c = seg[i].c;
+				}
+				uint32_t *d = (uint32_t*)((uint8_t*)ov->pixels + py * ov->pitch) + px;
+				uint8_t r, g, b, da;
+				SDL_GetRGBA(*d, ov->format, &r, &g, &b, &da);
+				int sr = c >> 16, sg = (c >> 8) & 0xff, sb = c & 0xff;
+				r = (r * (255 - a) + sr * a) / 255;
+				g = (g * (255 - a) + sg * a) / 255;
+				b = (b * (255 - a) + sb * a) / 255;
+				da = max(da, a);
+				*d = SDL_MapRGBA(ov->format, r, g, b, da);
+			}
+		}
+	}
+	SDL_UnlockSurface(ov);
+	SDL_FreeSurface(ws);
+	gfx_text_set_colors(old_bg, old_fg);
+	gfx_text_set_size(mem_get_sysvar16(mes_sysvar16_font_height), 0);
+}
+
+// fill the inside of a notice frame with its own background colour (to erase Japanese text)
+static void ov_erase(SDL_Surface *ov, int x0, int y0, int x1, int y1, int sample_x, int sample_y)
+{
+	SDL_LockSurface(ov);
+	uint32_t c = ((uint32_t*)((uint8_t*)ov->pixels + sample_y * ov->pitch))[sample_x];
+	for (int y = y0; y < y1; y++) {
+		uint32_t *d = (uint32_t*)((uint8_t*)ov->pixels + y * ov->pitch);
+		for (int x = x0; x < x1; x++)
+			d[x] = c;
+	}
+	SDL_UnlockSurface(ov);
+}
+
 static void hanahebi_util(struct param_list *params)
 {
 	if (getenv("HH_DEBUG_UTIL") && vm_expr_param(params, 0) != 9000 && vm_expr_param(params, 0) != 504) {
@@ -2775,7 +2878,20 @@ static void hanahebi_util(struct param_list *params)
 		#define PIECE(dx, dy, w, h, sx, sy) do { SDL_Rect r_ = { sx, sy, w, h }, d_ = { ox + (dx), oy + (dy), w, h }; \
 			SDL_BlitSurface(src, &r_, ov, &d_); } while (0)
 		PIECE(0, 0, 0x250, 0x54, 0, 0);
-		if (who <= 3) {
+		if (text_encoding_is_cp949()) {
+			static const char *names[] = { "시즈코", "케이코", "쿄코", "미츠코" };
+			static const char *num[] = { "2", "3" };
+			const char *n = num[stage > 1 ? 1 : stage];
+			if (who <= 3)
+				ov_text(ov, ox + 296, oy + 28, 22, names[who], 0xf8f0d8u,
+						"의 조교가 ", 0xf8f0d8u, n, 0xffd830u, "단계로 올랐습니다.", 0xf8f0d8u, NULL);
+			else if (who == 4)
+				ov_text(ov, ox + 296, oy + 28, 22, "모리타의 능욕으로 미츠코의 조교가 ", 0xf8f0d8u,
+						"2", 0xffd830u, "단계로 올랐습니다.", 0xf8f0d8u, NULL);
+			else if (who == 5)
+				ov_text(ov, ox + 296, oy + 28, 22, "하자쿠라단의 조교로 쿄코의 조교가 ", 0xf8f0d8u,
+						"2", 0xffd830u, "단계로 올랐습니다.", 0xf8f0d8u, NULL);
+		} else if (who <= 3) {
 			static const int name_x[4] = { 0, 0x50, 0xa0, 0xf0 };
 			PIECE(0x60, 0x1c, 0x50, 0x1c, name_x[who], 0x70);
 			PIECE(0xb0, 0x1c, 0x128, 0x1c, 0, 0x54);
@@ -2807,6 +2923,16 @@ static void hanahebi_util(struct param_list *params)
 		SDL_SetSurfaceBlendMode(src, SDL_BLENDMODE_NONE);
 		SDL_CALL(SDL_BlitSurface, src, &r, ov, &d);
 		SDL_SetSurfaceBlendMode(src, bm);
+		if (text_encoding_is_cp949()) {
+			// the only picture shown here is mes_item.gcc ("training tools can be searched")
+			ov_erase(ov, 24 + 24, 152 + 14, 24 + 568, 152 + 132, 24 + 30, 152 + 20);
+			ov_text(ov, 320, 152 + 22, 20, "저택 안에서 「", 0xf8f0d8u, "조교 도구", 0xff6060u,
+					"」 탐색이 가능해졌습니다.", 0xf8f0d8u, NULL);
+			ov_text(ov, 320, 152 + 60, 16, "실내나 복도에서 「", 0xf0f0f0u, "파란색", 0x6090ffu,
+					"」으로 표시되는 곳에는 여러 가지 조교 도구가", 0xf0f0f0u, NULL);
+			ov_text(ov, 320, 152 + 82, 16, "놓여 있습니다. 자물쇠가 풀려 들어갈 수 있게 된 방도", 0xf0f0f0u, NULL);
+			ov_text(ov, 320, 152 + 104, 16, "늘었으니, 여러 곳을 클릭해 보세요.", 0xf0f0f0u, NULL);
+		}
 		gfx_overlay_enable(2);
 		gfx_screen_dirty();
 		input_wait_until_up(INPUT_ACTIVATE);
