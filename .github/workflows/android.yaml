@@ -85,7 +85,7 @@ jobs:
 
     # a fixed download address: the "android-latest" release always has the newest APK
     - name: Publish to the android-latest release
-      if: github.event_name == 'push'
+      if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/')
       uses: softprops/action-gh-release@v2
       with:
         tag_name: android-latest
@@ -95,4 +95,16 @@ jobs:
         body: |
           가장 최근에 빌드된 AI5 런처 APK입니다. 아래 Assets에서 `ai5-launcher.apk`를 받아 설치하세요.
           커밋: ${{ github.sha }}
+        files: android/app/build/outputs/apk/release/ai5-launcher.apk
+
+    # a version tag (v0.5, ...) makes a regular release with the APK
+    - name: Publish the version release
+      if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ github.ref_name }}
+        name: AI5 런처 ${{ github.ref_name }}
+        prerelease: false
+        make_latest: true
+        body_path: android/release-notes.md
         files: android/app/build/outputs/apk/release/ai5-launcher.apk
