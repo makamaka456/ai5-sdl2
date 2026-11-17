@@ -4748,6 +4748,8 @@ static void sl_load(void)
 	items_read(SL_SLOT);
 }
 
+static void recs_log(void);
+
 static void sl_compare(SDL_Surface *a, SDL_Surface *b)
 {
 	unsigned diff = 0, total = 0;
@@ -4767,6 +4769,8 @@ static void sl_compare(SDL_Surface *a, SDL_Surface *b)
 	NOTICE("save/load check: %s point %u->%u: %u.%u%% of the screen differs",
 			sl_mes, sl_from, sl_to, permille / 10, permille % 10);
 	const char *dir = getenv("HH_DEBUG_SAVELOAD_DIR");
+	if (permille >= 50)
+		recs_log(); // the records the load replayed
 	if (dir && permille >= 5) {
 		char path[512];
 		snprintf(path, sizeof(path), "%s/%s_%u_a.bmp", dir, sl_mes, sl_to);
@@ -5046,6 +5050,15 @@ static bool screen_record_exists(uint16_t id)
 			return true;
 	}
 	return false;
+}
+
+static void recs_log(void)
+{
+	char line[1024] = "";
+	for (unsigned i = 0; i < nr_recs && strlen(line) < sizeof(line) - 48; i++)
+		snprintf(line + strlen(line), sizeof(line) - strlen(line), " %u:%s:%u",
+				recs[i].id, recs[i].name, recs[i].p[0]);
+	NOTICE("screen records:%s", line);
 }
 
 static void recs_add(struct screen_record *r)
