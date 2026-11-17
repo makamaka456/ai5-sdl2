@@ -3252,7 +3252,25 @@ static void hanahebi_util(struct param_list *params)
 	case 1004: // stop the map sounds
 		map_ambient_stop();
 		break;
-	case 1002: case 1003: // re-read the map state from the variables (we always do)
+	case 1003: // re-read the map state (the view is not redrawn: HH2D.exe
+		// keeps the black background in FAS014, checked under Wine)
+		map_state_from_vars();
+		break;
+	case 1002:
+		// re-read the map state from the variables and redraw the view of
+		// the current spot as the background (HH2D 0x403520 -> 0x401780).
+		// Used by the load redraw (LIBLARY sub 121). Checked by loading the
+		// same saves in HH2D.exe under Wine: with no character on screen the
+		// corridor comes back (FAS003), with a character the background
+		// stays black (FAS014). We do the same.
+		map_state_from_vars();
+		{
+			bool chars = false;
+			for (unsigned i = 0; i < NR_CHAR_SLOTS; i++)
+				chars |= char_cg[i] != NULL;
+			if (!chars)
+				map_draw_view(map.floor, map_variant(), map.node, map.dir * 2, 1);
+		}
 		break;
 	case 1019: // examine spot items: (1019, n) 3 = chapter 4 table
 		map_load_itm(param_or(params, 1, 0));
@@ -4656,6 +4674,9 @@ static SDL_Surface *sl_screen_now(void)
 			SDL_PIXELFORMAT_XRGB8888, 0);
 }
 
+static void hh_save_union_var4(unsigned no);
+static void save_list_set(unsigned slot);
+
 static void debug_save_load(void)
 {
 	static unsigned count = 0;
@@ -4664,6 +4685,27 @@ static void debug_save_load(void)
 	if (!e)
 		return;
 	uint32_t n = mem_get_sysvar32(SV32_SAVE_POINT);
+	if (*e == '!') {
+		// "!n[:slot]": save at point n into a slot (default 1) and quit,
+		// e.g. to load the same moment in the original HH2D.exe
+		const char *only = getenv("HH_DEBUG_SAVEMES");
+		if (n != (uint32_t)atoi(e + 1) || (only && strcasecmp(only, mem_mes_name())))
+			return;
+		const char *c = strchr(e, ':');
+		unsigned slot = c ? atoi(c + 1) : 1;
+		mem_set_var4(4002, 1);
+		mem_set_var4(2030, mem_get_var16(15));
+		mem_set_var4(2031, mem_get_var16(3));
+		savedata_write(flag_file(slot), memory_raw, 0, ARGS_OFF);
+		items_write(slot);
+		recs_write(slot);
+		mem_set_var4(4002, 0);
+		save_list_set(slot);
+		hh_save_union_var4(0);
+		savedata_write(flag_file(0), memory_raw, 0x2310 + 1000, 4000);
+		NOTICE("saved %s point %u to slot %u", mem_mes_name(), n, slot);
+		sys_exit(0);
+	}
 	if (*e == '@') {
 		// "@n": only once, at save point n, loading right away
 		if (done_at || n != (uint32_t)atoi(e + 1))
@@ -5082,6 +5124,34 @@ static void thumb_capture(void)
 }
 
 struct slot_info { bool used; char date[32]; SDL_Surface *thumb; };
+
+/*
+ * HH2D.exe save list (0x462ca0): 0x38 bytes per slot at 0x27c0 for slots
+ * 1..30 (u8 used, u8 chapter (byte 0x391), u16 year, month, day, hour,
+ * minute, char title[0x2c]). The scripts keep it in FLAG000 (LIBLARY sub 128:
+ * System.function[4](8, 0, 1000, 4000) = bytes 0x26f8..0x3697); the
+ * original's load screen shows a slot only when this entry is filled.
+ */
+#define SAVE_LIST_OFF 0x27c0
+#define SAVE_LIST_SIZE 0x38
+#define SAVE_LIST_SLOTS 30
+
+static void save_list_set(unsigned slot)
+{
+	if (slot < 1 || slot > SAVE_LIST_SLOTS)
+		return;
+	uint8_t *e = memory_raw + SAVE_LIST_OFF + (slot - 1) * SAVE_LIST_SIZE;
+	time_t t = time(NULL);
+	struct tm *tm = localtime(&t);
+	memset(e, 0, SAVE_LIST_SIZE);
+	e[0] = 1;
+	e[1] = memory_raw[0x391];
+	le_put16(e, 2, tm->tm_year + 1900);
+	le_put16(e, 4, tm->tm_mon + 1);
+	le_put16(e, 6, tm->tm_mday);
+	le_put16(e, 8, tm->tm_hour);
+	le_put16(e, 10, tm->tm_min);
+}
 
 static void slot_info_get(unsigned no, struct slot_info *info)
 {
@@ -6224,6 +6294,7 @@ static void util_save_screen(unsigned mode)
 			SDL_FreeSurface(info[i].thumb);
 	}
 	if (action == 0) {
+		save_list_set(slot);
 		FILE *f = file_open_utf8(save_path("CG%03u.dat", slot), "wb");
 		if (f) {
 			fwrite(thumb_now, sizeof(thumb_now), 1, f);
