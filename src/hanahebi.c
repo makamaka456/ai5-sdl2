@@ -1193,11 +1193,15 @@ static bool map_draw_view(unsigned floor, unsigned variant, unsigned node, unsig
 	struct cg *cg = cg_alloc_direct(640, 480);
 	const uint8_t *pal = file->data;
 	const uint8_t *px = file->data + 1024;
+	// rows are stored bottom-up (like a BMP): checked against HH2D.exe under
+	// Wine (FAS014 point 104 after loading: wooden ceiling, red carpet,
+	// "大広間" sign upright); the A00_*.A6 spot maps are stored the same way
 	for (unsigned i = 0; i < 640 * 480; i++) {
-		cg->pixels[i*4+0] = pal[px[i]*4+2];
-		cg->pixels[i*4+1] = pal[px[i]*4+1];
-		cg->pixels[i*4+2] = pal[px[i]*4+0];
-		cg->pixels[i*4+3] = 255;
+		unsigned o = ((479 - i / 640) * 640 + i % 640) * 4;
+		cg->pixels[o+0] = pal[px[i]*4+2];
+		cg->pixels[o+1] = pal[px[i]*4+1];
+		cg->pixels[o+2] = pal[px[i]*4+0];
+		cg->pixels[o+3] = 255;
 	}
 	archive_data_release(file);
 	gfx_draw_cg(dst, cg);
@@ -1334,7 +1338,7 @@ static unsigned map_spot_at(unsigned x, unsigned y)
 		return 0;
 	if (!memory_raw[0x6fe] && !getenv("HH_DEBUG_SPOTS"))
 		return 0;
-	unsigned v = a[y * 640 + x];
+	unsigned v = a[(479 - y) * 640 + x]; // stored bottom-up
 	if (v == 0xff || v == 0 || v > 0x30)
 		return 0;
 	if (map.itm[map_layout() * 0x30 + v - 1] == 0xff)
@@ -1875,7 +1879,7 @@ static void map_walk_draw(int hover)
 		SDL_LockSurface(ov);
 		uint32_t c = SDL_MapRGBA(ov->format, 255, 255, 255, 70);
 		for (int y = 0; y < 480; y++) {
-			const uint8_t *m = spots + y * 640;
+			const uint8_t *m = spots + (479 - y) * 640; // stored bottom-up
 			uint32_t *d = (uint32_t*)((uint8_t*)ov->pixels + y * ov->pitch);
 			for (int x = 0; x < 640; x++) {
 				if (m[x] == v)
