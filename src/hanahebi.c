@@ -2236,11 +2236,14 @@ static void util_map_command(unsigned no, struct param_list *params)
 	int room;
 	unsigned n = param_or(params, 1, 1);
 	switch (no) {
-	case 1007: // back on the 1st floor (from the basement stairs)
-		map.floor = 0; map.node = 58; map.dir = 0;
-		break;
-	case 1008: // into the basement
+	// HH2D jump table 0x425038: 1007 -> 0x405e70(1), 1008 -> 0x405e70(0);
+	// FASMAPBASE takes the stairs with var4[2020] = 1; Util(1007), and
+	// FASUNDERMAP comes back with var4[2020] = 0; Util(1008)
+	case 1007: // into the basement
 		map.floor = 1; map.node = 0; map.dir = 2;
+		break;
+	case 1008: // back on the 1st floor (at the basement stairs)
+		map.floor = 0; map.node = 58; map.dir = 0;
 		break;
 	case 1010: map.floor = 0; break;
 	case 1011: map.floor = 1; break;
