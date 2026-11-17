@@ -10,6 +10,11 @@ on:
       - 'fonts/**'
       - '.github/workflows/android.yaml'
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: '정식 릴리즈 태그 (예: v0.5). 비우면 APK만 빌드'
+        required: false
+        default: ''
 
 # only build the newest commit of a branch
 permissions:
@@ -97,13 +102,15 @@ jobs:
           커밋: ${{ github.sha }}
         files: android/app/build/outputs/apk/release/ai5-launcher.apk
 
-    # a version tag (v0.5, ...) makes a regular release with the APK
+    # a version tag (v0.5, ...) pushed, or given when running the workflow by
+    # hand, makes a regular release with the APK (the tag is created on this commit)
     - name: Publish the version release
-      if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+      if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: ${{ github.ref_name }}
-        name: AI5 런처 ${{ github.ref_name }}
+        tag_name: ${{ inputs.release_tag || github.ref_name }}
+        target_commitish: ${{ github.sha }}
+        name: AI5 런처 ${{ inputs.release_tag || github.ref_name }}
         prerelease: false
         make_latest: true
         body_path: android/release-notes.md
