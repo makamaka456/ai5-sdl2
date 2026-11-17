@@ -4453,7 +4453,9 @@ static void hanahebi_se(struct param_list *params)
 {
 	switch (vm_expr_param(params, 0)) {
 	case 0:
-		if (setting_enabled("Se", "IsSe")) {
+		// an empty name comes from replaying the screen records after
+		// loading (no sound was recorded): nothing to play
+		if (setting_enabled("Se", "IsSe") && *vm_string_param(params, 1)) {
 			audio_se_play(vm_string_param(params, 1), se_channel(params, 2));
 			apply_volume(AUDIO_CH_SE(se_channel(params, 2)), "Effect");
 		}
