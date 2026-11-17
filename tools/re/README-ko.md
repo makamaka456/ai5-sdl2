@@ -21,6 +21,8 @@ B=/home/user/ai5-sdl2; gcc -o arcdump arcdump.c -I$B/subprojects/libai5/include 
 - `cginfo gcc.arc NAME...` 그림 정보
 
 ## 화면 테스트 (가상 화면)
+자동 진행·저장/불러오기 비교·원본 비교 스크립트는 `tools/test/`(설명: `docs/handoff-hanahebi-ko.md` 4장). 아래는 예전 수동 도구.
+
 ```
 Xvfb :99 -screen 0 1280x800x24 &
 runhh.sh <log> --korean      # 꽃과뱀 실행 (예전 프로세스 종료 후)
