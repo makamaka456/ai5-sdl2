@@ -2014,7 +2014,7 @@ static void debug_map_path(void)
 	NOTICE("map path: node %u dir %u -> room %d: %s", map.node, map.dir, room, keys);
 }
 
-static void util_map_select(void)
+static void util_map_select_inner(void)
 {
 	map_state_from_vars();
 	debug_map_path();
@@ -3152,7 +3152,12 @@ static void hanahebi_util(struct param_list *params)
 		string_free(str);
 	}
 	if (vm_expr_param(params, 0) == 1001) {
-		util_map_select();
+		util_map_select_inner();
+		// HH2D draws the walking view into the background surfaces: a
+		// person met in the corridor (FASMAP15 etc.) stands in front of the
+		// corridor (checked by loading such a save in HH2D.exe under Wine)
+		map_draw_view(map.floor, map_variant(), map.node, map.dir * 2, 2);
+		map_draw_view(map.floor, map_variant(), map.node, map.dir * 2, 1);
 		return;
 	}
 	if (vm_expr_param(params, 0) == 2000) {
