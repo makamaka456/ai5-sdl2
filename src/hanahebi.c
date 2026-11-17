@@ -3365,8 +3365,13 @@ static void hanahebi_util(struct param_list *params)
 		// script's "map on" flag, Util 1005/1006) was wrong: those points
 		// have var4[2022] != 1 (black after load here) and still show the corridor in the original
 		map_state_from_vars();
-		if (screen_record_exists(16))
-			map_draw_view(map.floor, map_variant(), map.node, map.dir * 2, 1);
+		// The records are replayed in number order, so the characters drawn
+		// onto the background with Util 51 (records 2/13) are already there:
+		// draw the view as the clean background (surface 2) and put them back
+		// on top (FAS022: Keiko in the corridor stayed after loading)
+		if (screen_record_exists(16)
+				&& map_draw_view(map.floor, map_variant(), map.node, map.dir * 2, 2))
+			direct_redraw();
 		break;
 	case 1019: // examine spot items: (1019, n) 3 = chapter 4 table
 		map_load_itm(param_or(params, 1, 0));
