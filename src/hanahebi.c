@@ -565,9 +565,14 @@ static void util_characters(struct param_list *params)
 	case 4: // redraw (4, _, fade)
 		char_present(param_or(params, 3, 0) == 1);
 		break;
-	case 5:
-	case 6: // redraw with fade
+	case 5: // draw the characters with a fade (HH2D 0x429ce0(1))
 		char_present(true);
+		break;
+	case 6: // fade out the characters: the background alone (HH2D
+		// 0x429ce0(0) -- the scripts then remove them with (50, 0);
+		// FAS020 point 118: the two old men left the screen)
+		gfx_copy(0, 0, 640, 480, 1, 0, 0, BACK_SURFACE);
+		crossfade_to(BACK_SURFACE);
 		break;
 	case 8:
 	case 9: // show (8, slot, fade)
