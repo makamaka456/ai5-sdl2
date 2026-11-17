@@ -4517,24 +4517,24 @@ static void hanahebi_voice(struct param_list *params)
  * on the screen (HH2D.exe 0x450620). The previous screen is kept in 16.
  *   mode 0: immediately, 1/2: crossfade. If fill is set, the back buffer is
  *   first filled with color.
+ * Modes 0 and 1 then copy the previous screen (16) back into the back buffer
+ * (HH2D 0x4509fa / 0x450885), so a flash -- (0, color) then (0) -- brings
+ * the screen from before the flash back (FAS000 point 166: the boy with the
+ * knife stays after the white flash, checked under Wine).
  */
 static void hanahebi_present(struct param_list *params)
 {
 	unsigned mode = param_or(params, 0, 0);
-	// (0, color): flash the screen with a color; the next (0) shows the
-	// back buffer again
-	if (mode == 0 && params->nr_params == 2) {
-		gfx_copy(0, 0, 640, 480, 0, 0, 0, PREV_SURFACE);
-		gfx_fill(0, 0, 640, 480, 0, param_or(params, 1, 0));
-		return;
-	}
-	if (param_or(params, 2, 0))
-		gfx_fill(0, 0, 640, 480, BACK_SURFACE, param_or(params, 1, 0));
+	bool fill = param_or(params, 2, 0) || (mode == 0 && params->nr_params == 2);
 	gfx_copy(0, 0, 640, 480, 0, 0, 0, PREV_SURFACE);
+	if (fill)
+		gfx_fill(0, 0, 640, 480, BACK_SURFACE, param_or(params, 1, 0));
 	if (mode == 0)
 		gfx_copy(0, 0, 640, 480, BACK_SURFACE, 0, 0, 0);
 	else
 		crossfade_to(BACK_SURFACE);
+	if (mode <= 1)
+		gfx_copy(0, 0, 640, 480, PREV_SURFACE, 0, 0, BACK_SURFACE);
 }
 
 // System.function[9](name): load a GCC image into the destination surface
