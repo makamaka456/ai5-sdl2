@@ -4680,6 +4680,12 @@ static void debug_save_load(void)
 	case 0: // save
 		if (atoi(e) <= 0 || ++count % atoi(e))
 			return;
+		// not inside a called script: a load restarts only the current
+		// script and the caller is lost (also in a real save/load)
+		if (vm.mes_call_stack_ptr > 0) {
+			count--;
+			return;
+		}
 		snprintf(sl_mes, sizeof(sl_mes), "%s", mem_mes_name());
 		sl_from = n;
 		sl_save();
