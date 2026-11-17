@@ -1459,6 +1459,9 @@ void vm_load_mes_with_table(char *name)
 			name = redirect_to;
 		}
 	}
+	// debugging: AI5_LOG_MES=1 prints every script load
+	if (getenv("AI5_LOG_MES"))
+		NOTICE("load MES %s", name);
 	char *mem_name = mem_mes_name();
 	if (name != mem_name)
 		strcpy(mem_name, name);

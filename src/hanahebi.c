@@ -450,6 +450,15 @@ static struct cg *char_load_cg(const char *name, unsigned slot)
 		WARNING("Failed to load character CG \"%s\"", name);
 		return NULL;
 	}
+	// expression pictures have no alpha: pure green (the mask color the
+	// scripts use for them, System.var32[9] = 0xff00) is transparent
+	if (cg->metrics.bpp != 32) {
+		uint8_t *p = cg->pixels;
+		for (unsigned i = 0; i < cg->metrics.w * cg->metrics.h; i++, p += 4) {
+			if (p[0] == 0 && p[1] == 0xff && p[2] == 0)
+				p[3] = 0;
+		}
+	}
 	if (slot == 1)
 		cg->metrics.x -= 160;
 	else if (slot == 2)
@@ -505,11 +514,17 @@ static void char_present(bool fade)
 		crossfade_to(WORK_SURFACE);
 	else
 		gfx_copy(0, 0, 640, 480, WORK_SURFACE, 0, 0, 0);
+	// keep the 2D back buffer in step: transitions (Util 2001) show it,
+	// e.g. right after a load redraws the characters (LIBLARY sub 121)
+	gfx_copy(0, 0, 640, 480, WORK_SURFACE, 0, 0, BACK_SURFACE);
 }
 
 static void util_characters(struct param_list *params)
 {
 	unsigned op = param_or(params, 1, 0);
+	if (getenv("AI5_LOG_CHARS") && (op == 1 || op == 18))
+		NOTICE("Util50 %u %s slot %u", op, op == 1 ? name_param(params, 2, 4) : name_param(params, 3, 5),
+				param_or(params, op == 1 ? 3 : 4, 0));
 	switch (op) {
 	case 0: // remove all
 		for (unsigned i = 0; i < NR_CHAR_SLOTS; i++)
@@ -521,10 +536,23 @@ static void util_characters(struct param_list *params)
 	case 2: // remove (2, slot)
 		char_unload(param_or(params, 2, 0));
 		break;
-	case 3: // remove (3, slot, fade) and redraw
-		char_unload(param_or(params, 2, 0));
-		char_present(param_or(params, 3, 0) == 1);
+	case 3: { // show (3, slot, fade) -- HH2D 0x429da0: background + that
+		// slot; with fade = 1 background + all slots, faded in
+		unsigned slot = param_or(params, 2, 0);
+		if (param_or(params, 3, 0) == 1) {
+			char_present(true);
+			break;
+		}
+		gfx_copy(0, 0, 640, 480, 1, 0, 0, WORK_SURFACE);
+		if (slot < NR_CHAR_SLOTS && char_cg[slot]) {
+			gfx_draw_cg(WORK_SURFACE, char_cg[slot]);
+			if (char_face[slot])
+				gfx_draw_cg(WORK_SURFACE, char_face[slot]);
+		}
+		gfx_copy(0, 0, 640, 480, WORK_SURFACE, 0, 0, 0);
+		gfx_copy(0, 0, 640, 480, WORK_SURFACE, 0, 0, BACK_SURFACE);
 		break;
+	}
 	case 4: // redraw (4, _, fade)
 		char_present(param_or(params, 3, 0) == 1);
 		break;
@@ -565,7 +593,8 @@ static void util_characters(struct param_list *params)
  *   (2, slot)          remove sprite; surface 1 is rebuilt from the clean
  *                      background in surface 2 plus the remaining sprites
  *   (3/4)              forget all sprites (no redraw)
- * The drawn rectangle is returned in var16[23..26].
+ * The drawn rectangle is returned in var16[23..24] (left, top) and
+ * var32[23..24] (right, bottom, inclusive) as in HH2D.exe.
  */
 static struct cg *direct_cg[NR_CHAR_SLOTS];
 
@@ -597,17 +626,38 @@ static void util_characters_direct(struct param_list *params)
 		}
 		mem_set_var16(23, cg->metrics.x);
 		mem_set_var16(24, cg->metrics.y);
-		mem_set_var16(25, cg->metrics.x + cg->metrics.w);
-		mem_set_var16(26, cg->metrics.y + cg->metrics.h);
+		// HH2D: var32[23..24] = right / bottom edge (inclusive)
+		mem_set_var32(23, cg->metrics.x + cg->metrics.w - 1);
+		mem_set_var32(24, cg->metrics.y + cg->metrics.h - 1);
 		break;
 	}
 	case 2: {
+		// (2, slot): remove one sprite; slot 3 = all of them (HH2D 0x429310).
+		// Surface 1 is rebuilt from the background; the removed area is
+		// returned in var16[23..24] / var32[23..24]
 		unsigned slot = param_or(params, 2, 0);
-		if (slot < NR_CHAR_SLOTS && direct_cg[slot]) {
-			cg_free(direct_cg[slot]);
-			direct_cg[slot] = NULL;
-			direct_redraw();
+		int x0 = 0xffff, y0 = 0xffff, x1 = 0, y1 = 0;
+		bool any = false;
+		for (unsigned i = 0; i < NR_CHAR_SLOTS; i++)
+			any |= direct_cg[i] != NULL;
+		if (!any)
+			break; // the original does nothing without sprites
+		for (unsigned i = 0; i < NR_CHAR_SLOTS; i++) {
+			if (!direct_cg[i] || (slot != 3 && i != slot))
+				continue;
+			struct cg *cg = direct_cg[i];
+			x0 = min(x0, cg->metrics.x);
+			y0 = min(y0, cg->metrics.y);
+			x1 = max(x1, cg->metrics.x + (int)cg->metrics.w);
+			y1 = max(y1, cg->metrics.y + (int)cg->metrics.h);
+			cg_free(cg);
+			direct_cg[i] = NULL;
 		}
+		direct_redraw();
+		mem_set_var16(23, x0);
+		mem_set_var16(24, y0);
+		mem_set_var32(23, x1 - 1);
+		mem_set_var32(24, y1 - 1);
 		break;
 	}
 	case 3:
@@ -3693,8 +3743,11 @@ static void msgwin_hide(void)
 	gfx_screen_dirty();
 }
 
+static void debug_save_load_text(void);
+
 static void hanahebi_draw_text(const char *text)
 {
+	debug_save_load_text();
 	if (getenv("HH_DEBUG_TEXT"))
 		NOTICE("text dst=%u cur=%u,%u start=%u,%u end=%u,%u space=%u,%u font=%u",
 			mem_get_sysvar16(mes_sysvar16_dst_surface),
@@ -4441,9 +4494,15 @@ static void hanahebi_load_image(struct param_list *params)
 		WARNING("Failed to load CG \"%s\"", name);
 		return;
 	}
-	if (params->nr_params >= 3) {
+	if (params->nr_params == 3) {
 		cg->metrics.x = param_or(params, 1, cg->metrics.x);
 		cg->metrics.y = param_or(params, 2, cg->metrics.y);
+	} else if (params->nr_params >= 4) {
+		// ("", dx, dy, name address): only used when redrawing the screen
+		// after a load (LIBLARY sub 121), always with 0, 0 -- the picture
+		// keeps its own position (faces are then moved by sub 143)
+		cg->metrics.x += (int16_t)param_or(params, 1, 0);
+		cg->metrics.y += (int16_t)param_or(params, 2, 0);
 	}
 	unsigned dst = mem_get_sysvar16(mes_sysvar16_dst_surface);
 	if (cg->metrics.w > 640 || cg->metrics.h > 480)
@@ -4516,6 +4575,156 @@ static const char *flag_file(unsigned no)
 	return save_path("FLAG%03u", no);
 }
 
+static void hh_resume_load(unsigned no);
+static void recs_write(unsigned no);
+static void recs_read(unsigned no);
+
+/*
+ * debugging: HH_DEBUG_SAVELOAD=N saves to slot 98 at every N-th save point
+ * and loads it right away, like the script's save (LIBLARY sub 130) and load
+ * (sub 129) routines, to check that play continues from a loaded game.
+ */
+/*
+ * debugging: HH_DEBUG_SAVELOAD=N checks loading at every N-th save point:
+ *   1. at save point n: save to slot 98 (like LIBLARY sub 130)
+ *   2. at the next save point m: keep the screen (A), then load slot 98
+ *      (like sub 129) -- the script redraws the screen and continues at n
+ *   3. at save point m again: compare the screen (B) with A
+ * "@n" does only step 1 at point n and loads right away.
+ * HH_DEBUG_SAVELOAD_DIR=dir keeps A and B as BMP files when they differ.
+ */
+static SDL_Surface *sl_shot = NULL;
+static int sl_state = 0;
+static uint32_t sl_from, sl_to;
+static char sl_mes[64];
+#define SL_SLOT 98
+
+
+static void sl_save(void)
+{
+	mem_set_var4(4002, 1);
+	mem_set_var4(2030, mem_get_var16(15));
+	mem_set_var4(2031, mem_get_var16(3));
+	savedata_write(flag_file(SL_SLOT), memory_raw, 0, ARGS_OFF);
+	items_write(SL_SLOT);
+	recs_write(SL_SLOT);
+	mem_set_var4(4002, 0);
+}
+
+static void sl_load(void)
+{
+	mem_set_var4(3014, 0);
+	mem_set_var4(4004, 1);
+	mem_set_sysvar16(mes_sysvar16_flags, mem_get_sysvar16(mes_sysvar16_flags) | 0x10);
+	recs_read(SL_SLOT);
+	mem_set_var4(4002, 1);
+	hh_resume_load(SL_SLOT);
+	items_read(SL_SLOT);
+}
+
+static void sl_compare(SDL_Surface *a, SDL_Surface *b)
+{
+	unsigned diff = 0, total = 0;
+	for (int y = 0; y < 480 && y < a->h && y < b->h; y++) {
+		uint8_t *pa = (uint8_t*)a->pixels + y * a->pitch;
+		uint8_t *pb = (uint8_t*)b->pixels + y * b->pitch;
+		for (int x = 0; x < 640 && x < a->w && x < b->w; x++, total++) {
+			for (int c = 0; c < 3; c++) {
+				if (abs(pa[x*4+c] - pb[x*4+c]) > 24) {
+					diff++;
+					break;
+				}
+			}
+		}
+	}
+	unsigned permille = total ? diff * 1000 / total : 0;
+	NOTICE("save/load check: %s point %u->%u: %u.%u%% of the screen differs",
+			sl_mes, sl_from, sl_to, permille / 10, permille % 10);
+	const char *dir = getenv("HH_DEBUG_SAVELOAD_DIR");
+	if (dir && permille >= 5) {
+		char path[512];
+		snprintf(path, sizeof(path), "%s/%s_%u_a.bmp", dir, sl_mes, sl_to);
+		SDL_SaveBMP(a, path);
+		snprintf(path, sizeof(path), "%s/%s_%u_b.bmp", dir, sl_mes, sl_to);
+		SDL_SaveBMP(b, path);
+	}
+}
+
+static SDL_Surface *sl_screen_now(void)
+{
+	return SDL_ConvertSurfaceFormat(gfx_get_surface(gfx_current_surface()),
+			SDL_PIXELFORMAT_XRGB8888, 0);
+}
+
+static void debug_save_load(void)
+{
+	static unsigned count = 0;
+	static bool done_at = false;
+	const char *e = getenv("HH_DEBUG_SAVELOAD");
+	if (!e)
+		return;
+	uint32_t n = mem_get_sysvar32(SV32_SAVE_POINT);
+	if (*e == '@') {
+		// "@n": only once, at save point n, loading right away
+		if (done_at || n != (uint32_t)atoi(e + 1))
+			return;
+		done_at = true;
+		NOTICE("save/load test: %s point %u", mem_mes_name(), n);
+		sl_save();
+		sl_load();
+		return;
+	}
+	if (sl_state && strcmp(sl_mes, mem_mes_name()))
+		sl_state = 0; // another script: give up this one
+	switch (sl_state) {
+	case 0: // save
+		if (atoi(e) <= 0 || ++count % atoi(e))
+			return;
+		snprintf(sl_mes, sizeof(sl_mes), "%s", mem_mes_name());
+		sl_from = n;
+		sl_save();
+		sl_state = 1;
+		break;
+	case 1: // the point to check: the screen at its first text
+		if (n == sl_from)
+			return;
+		sl_to = n;
+		sl_state = 2;
+		break;
+	case 2: // no text between the points: try the next one
+		sl_to = n;
+		break;
+	case 3: // screen A taken: load
+		NOTICE("save/load test: %s point %u (checked at %u)", sl_mes, sl_from, sl_to);
+		sl_state = 4;
+		sl_load();
+		break;
+	case 4:
+		if (n == sl_to)
+			sl_state = 5;
+		break;
+	case 5: // passed the point without text?
+		sl_state = 0;
+		break;
+	}
+}
+
+// first text after the checked point: take screen A / B
+static void debug_save_load_text(void)
+{
+	if (sl_state == 2) {
+		if (sl_shot)
+			SDL_FreeSurface(sl_shot);
+		sl_shot = sl_screen_now();
+		sl_state = 3;
+	} else if (sl_state == 5) {
+		SDL_Surface *now = sl_screen_now();
+		sl_compare(sl_shot, now);
+		SDL_FreeSurface(now);
+		sl_state = 0;
+	}
+}
+
 static void hh_stmt_save_point(void)
 {
 	uint32_t n = le_get32(vm.ip.code, vm.ip.ptr);
@@ -4523,6 +4732,9 @@ static void hh_stmt_save_point(void)
 	mem_set_sysvar32(SV32_SAVE_POINT, n);
 	void screen_records_snapshot(void);
 	screen_records_snapshot();
+	if (getenv("AI5_LOG_MES"))
+		NOTICE("save point %u", n);
+	debug_save_load();
 }
 
 static void hh_stmt_jump_save_point(void)
@@ -6074,6 +6286,20 @@ static void hanahebi_mem_init(void)
 		set = strchr(set, ',');
 		if (set)
 			set++;
+	}
+	// debugging: HH_DEBUG_POKE16="0x2180:100,..." sets u16 memory values at start
+	const char *p16 = getenv("HH_DEBUG_POKE16");
+	while (p16 && *p16) {
+		char *end;
+		unsigned long a = strtoul(p16, &end, 0);
+		if (*end == ':' && a + 1 < sizeof(struct memory)) {
+			unsigned long v = strtoul(end + 1, NULL, 0);
+			memory_raw[a] = v & 0xff;
+			memory_raw[a + 1] = v >> 8;
+		}
+		p16 = strchr(p16, ',');
+		if (p16)
+			p16++;
 	}
 	uint16_t flags = mem_get_sysvar16(mes_sysvar16_flags) | 0x402 | 0x2000;
 	const char *play = config_ini_get("DispEffect", "Play");
