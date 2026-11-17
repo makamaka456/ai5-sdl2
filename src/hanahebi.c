@@ -1958,9 +1958,66 @@ static int map_room_list(void)
 	return r < 0 ? -1 : (int)map_room_id(r);
 }
 
+/*
+ * debugging: HH_DEBUG_MAP_PATH=room prints the keys that walk from the
+ * current spot to that room's door (U = up/forward, L = left, R = right),
+ * e.g. to walk the same way in the original HH2D.exe
+ */
+static void debug_map_path(void)
+{
+	const char *e = getenv("HH_DEBUG_MAP_PATH");
+	if (!e || !map_load_graph(map.floor))
+		return;
+	int room = atoi(e);
+	static int prev[MAP_MAX_NODES * 4];
+	static char how[MAP_MAX_NODES * 4];
+	static int queue[MAP_MAX_NODES * 4];
+	for (unsigned i = 0; i < MAP_MAX_NODES * 4; i++)
+		prev[i] = -2;
+	int start = map.node * 4 + map.dir, qh = 0, qt = 0, found = -1;
+	prev[start] = -1;
+	queue[qt++] = start;
+	while (qh < qt && found < 0) {
+		int st = queue[qh++], node = st / 4, dir = st % 4;
+		for (unsigned i = 0; i < 21; i++) {
+			const struct map_door *d = &map_doors[map.floor][i];
+			if (d->node < 0)
+				break;
+			if (d->room == room && d->node == node && d->dir == dir)
+				found = st;
+		}
+		int nx[3] = { -1, node * 4 + (dir + 1) % 4, node * 4 + (dir + 3) % 4 };
+		char hw[3] = { 'U', 'L', 'R' };
+		int fw = map.next[map.floor][node][dir];
+		if (fw >= 0 && fw < MAP_MAX_NODES)
+			nx[0] = fw * 4 + dir;
+		for (int k = 0; k < 3; k++) {
+			if (nx[k] < 0 || prev[nx[k]] != -2)
+				continue;
+			prev[nx[k]] = st;
+			how[nx[k]] = hw[k];
+			queue[qt++] = nx[k];
+		}
+	}
+	if (found < 0) {
+		NOTICE("map path: room %d not found from node %u dir %u", room, map.node, map.dir);
+		return;
+	}
+	char keys[512];
+	int n = 0;
+	for (int st = found; prev[st] >= 0 && n < 511; st = prev[st])
+		keys[n++] = how[st];
+	for (int i = 0; i < n / 2; i++) {
+		char t = keys[i]; keys[i] = keys[n - 1 - i]; keys[n - 1 - i] = t;
+	}
+	keys[n] = 0;
+	NOTICE("map path: node %u dir %u -> room %d: %s", map.node, map.dir, room, keys);
+}
+
 static void util_map_select(void)
 {
 	map_state_from_vars();
+	debug_map_path();
 	// debugging: HH_MAP_START="point,dir" starts there once
 	static bool start_used = false;
 	const char *st = getenv("HH_MAP_START");
@@ -2162,6 +2219,8 @@ static void util_map_select(void)
  *   1014 n turn right, 1015 n turn left, 1017 (point, ?) go to a point,
  *   1018 (door index, ?) stand at a door.
  */
+static bool screen_record_exists(uint16_t id);
+
 static void map_view_to_screen(void)
 {
 	bool ok = map_draw_view(map.floor, map_variant(), map.node, map.dir * 2, BACK_SURFACE);
@@ -3285,11 +3344,12 @@ static void hanahebi_util(struct param_list *params)
 		// the current spot as the background (HH2D 0x403520 -> 0x401780).
 		// Used by the load redraw (LIBLARY sub 121), which then copies the
 		// background surface 1 to the back buffer and fades to it. Checked by
-		// loading saves in HH2D.exe under Wine: without a character the
-		// corridor comes back (FAS003, FAS004), with one the background stays
-		// black (FAS014). So the view goes to surface 1 only without characters
+		// loading saves in HH2D.exe under Wine: the corridor comes back when
+		// the map screen was set up (screen record 16, restored with Util
+		// 1000: FAS003 points 1 and 27 -- also behind a character -- and
+		// FAS004 point 64); without it the background stays (FAS014: black)
 		map_state_from_vars();
-		if (!char_any())
+		if (screen_record_exists(16))
 			map_draw_view(map.floor, map_variant(), map.node, map.dir * 2, 1);
 		break;
 	case 1019: // examine spot items: (1019, n) 3 = chapter 4 table
@@ -4949,6 +5009,15 @@ static const char *rec_cmp_name;
 static bool rec_id_name_is(struct screen_record *r, void *d)
 {
 	return r->id == *(uint16_t*)d && !strncmp(r->name, rec_cmp_name, 31);
+}
+
+static bool screen_record_exists(uint16_t id)
+{
+	for (unsigned i = 0; i < nr_recs; i++) {
+		if (recs[i].id == id)
+			return true;
+	}
+	return false;
 }
 
 static void recs_add(struct screen_record *r)
