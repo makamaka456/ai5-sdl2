@@ -199,6 +199,7 @@ SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./build/ai5 <게임폴더>
 - 엔진 환경 변수: `AI5_STRETCH`(1=꽉 채우기), `AI5_BACKGROUND`(PNG 경로[#버전], 화면 전체 배경), `AI5_CONTROLLER`(게임패드) — 모두 게임 중 바뀌면 바로 반영
 - 서명: 고정 키 `android/ai5-launcher.keystore`(비밀번호 ai5launcher, 일부러 공개. 덮어 설치가 되게 하려는 것). 키를 바꾸면 사용자가 앱을 지우고 다시 설치해야 함
 - 고정 다운로드 주소: 브랜치에 푸시하면 Releases의 `android-latest`(사전 출시)에 `ai5-launcher.apk`가 올라감 → https://github.com/makamaka456/ai5-sdl2/releases/tag/android-latest
+- **정식 릴리즈** (v0.5, 2026-11-17 첫 정식판): `android/app/build.gradle` versionCode·versionName을 올리고 `android/release-notes.md`(릴리즈 설명)를 고쳐 푸시 → Actions `Android` 워크플로를 손으로 실행하며 입력 `release_tag=v0.6` 등 → Actions가 태그를 만들고 정식 릴리즈(최신 표시)에 `ai5-launcher.apk`를 올림. 작업 공간에서는 git 태그 푸시가 막혀 있어 이 방법을 씀 (v 태그를 직접 푸시해도 같은 단계가 돎)
 - APK는 GitHub Actions `Android` 워크플로(`.github/workflows/android.yaml`) 산출물 `ai5-launcher-apk` (작업 공간에서는 dl.google.com이 막혀 직접 빌드 불가)
 
 ## 다른 게임 지원 때 검토할 것 (꽃과뱀 마무리 후, 2026-11-15 사용자 요청)
