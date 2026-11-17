@@ -3300,7 +3300,9 @@ static void hanahebi_util(struct param_list *params)
 		break;
 	}
 	case 6: case 10: // system menu closed / redraw menu bar
-	case 1005: case 1006: // map: pause/resume (TODO)
+	// map off/on: HH2D 0x4047b0(0/1) stops/starts the map sounds and the
+	// overlay; the scripts keep the state in var4[2022] (see 1002)
+	case 1005: case 1006:
 		break;
 	case 1022: // put a person on the map: (1022, node, id, ...)
 		map_place_person(param_or(params, 1, 0), param_or(params, 2, 0));
@@ -3351,13 +3353,15 @@ static void hanahebi_util(struct param_list *params)
 		// re-read the map state from the variables and redraw the view of
 		// the current spot as the background (HH2D 0x403520 -> 0x401780).
 		// Used by the load redraw (LIBLARY sub 121), which then copies the
-		// background surface 1 to the back buffer and fades to it. Checked by
-		// loading saves in HH2D.exe under Wine: the corridor comes back when
-		// the map screen was set up (screen record 16, restored with Util
-		// 1000: FAS003 points 1 and 27 -- also behind a character -- and
-		// FAS004 point 64); without it the background stays (FAS014: black)
+		// background surface 1 to the back buffer and fades to it.
+		// The original shows the view only while the map is "on": sub 121
+		// calls Util 1006 (0x4047b0(1), map on) right after 1002 only when
+		// var4[2022] == 1; scripts pair var4[2022] = 0 with Util 1005 (map
+		// off). Checked by loading saves in HH2D.exe under Wine: corridor
+		// at FAS003 points 1 and 27 and FAS004 point 64 (var4[2022] = 1),
+		// black at FAS014 point 104 (var4[2022] = 0 before Util 1005)
 		map_state_from_vars();
-		if (screen_record_exists(16))
+		if (mem_get_var4(2022) == 1)
 			map_draw_view(map.floor, map_variant(), map.node, map.dir * 2, 1);
 		break;
 	case 1019: // examine spot items: (1019, n) 3 = chapter 4 table
