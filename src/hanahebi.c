@@ -3354,14 +3354,14 @@ static void hanahebi_util(struct param_list *params)
 		// the current spot as the background (HH2D 0x403520 -> 0x401780).
 		// Used by the load redraw (LIBLARY sub 121), which then copies the
 		// background surface 1 to the back buffer and fades to it.
-		// The original shows the view only while the map is "on": sub 121
-		// calls Util 1006 (0x4047b0(1), map on) right after 1002 only when
-		// var4[2022] == 1; scripts pair var4[2022] = 0 with Util 1005 (map
-		// off). Checked by loading saves in HH2D.exe under Wine: corridor
-		// at FAS003 points 1 and 27 and FAS004 point 64 (var4[2022] = 1),
-		// black at FAS014 point 104 (var4[2022] = 0 before Util 1005)
+		// Checked by loading saves in HH2D.exe under Wine: the corridor
+		// comes back when the map screen was set up (screen record 16,
+		// restored with Util 1000: FAS003 points 1 and 27 -- also behind a
+		// character -- and FAS004 point 64). Gating it on var4[2022] (the
+		// script's "map on" flag, Util 1005/1006) was wrong: those points
+		// have var4[2022] != 1 (black after load here) and still show the corridor in the original
 		map_state_from_vars();
-		if (mem_get_var4(2022) == 1)
+		if (screen_record_exists(16))
 			map_draw_view(map.floor, map_variant(), map.node, map.dir * 2, 1);
 		break;
 	case 1019: // examine spot items: (1019, n) 3 = chapter 4 table
