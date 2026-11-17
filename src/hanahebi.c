@@ -519,6 +519,15 @@ static void char_present(bool fade)
 	gfx_copy(0, 0, 640, 480, WORK_SURFACE, 0, 0, BACK_SURFACE);
 }
 
+static bool char_any(void)
+{
+	for (unsigned i = 0; i < NR_CHAR_SLOTS; i++) {
+		if (char_cg[i])
+			return true;
+	}
+	return false;
+}
+
 static void util_characters(struct param_list *params)
 {
 	unsigned op = param_or(params, 1, 0);
@@ -3261,16 +3270,12 @@ static void hanahebi_util(struct param_list *params)
 		// the current spot as the background (HH2D 0x403520 -> 0x401780).
 		// Used by the load redraw (LIBLARY sub 121). Checked by loading the
 		// same saves in HH2D.exe under Wine: with no character on screen the
-		// corridor comes back (FAS003), with a character the background
-		// stays black (FAS014). We do the same.
+		// corridor comes back (FAS003 point 1, FAS004 point 64), with one the
+		// background stays black (FAS014 point 104) -- although all three
+		// have a bg_black background record
 		map_state_from_vars();
-		{
-			bool chars = false;
-			for (unsigned i = 0; i < NR_CHAR_SLOTS; i++)
-				chars |= char_cg[i] != NULL;
-			if (!chars)
-				map_draw_view(map.floor, map_variant(), map.node, map.dir * 2, 1);
-		}
+		if (!char_any())
+			map_draw_view(map.floor, map_variant(), map.node, map.dir * 2, 1);
 		break;
 	case 1019: // examine spot items: (1019, n) 3 = chapter 4 table
 		map_load_itm(param_or(params, 1, 0));
