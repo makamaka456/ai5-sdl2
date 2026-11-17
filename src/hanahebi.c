@@ -574,8 +574,10 @@ static void util_characters(struct param_list *params)
 		char_present(param_or(params, 3, 0) == 1);
 		break;
 	case 10:
-	case 11: // redraw
-		char_present(false);
+	case 11: // draw the characters (HH2D 0x429a90 draws the slots only:
+		// without characters the screen is left as it is)
+		if (char_any())
+			char_present(false);
 		break;
 	case 18: { // change expression (18, _, name, slot); only for Util 50 sprites
 		unsigned slot = param_or(params, 4, 0);
@@ -2160,6 +2162,15 @@ static void util_map_select(void)
  *   1014 n turn right, 1015 n turn left, 1017 (point, ?) go to a point,
  *   1018 (door index, ?) stand at a door.
  */
+static void map_view_to_screen(void)
+{
+	bool ok = map_draw_view(map.floor, map_variant(), map.node, map.dir * 2, BACK_SURFACE);
+	if (getenv("HH_DEBUG_UTIL"))
+		NOTICE("map view to screen: floor %u node %u dir %u: %s", map.floor, map.node, map.dir, ok ? "ok" : "none");
+	if (ok)
+		gfx_copy(0, 0, 640, 480, BACK_SURFACE, 0, 0, 0);
+}
+
 static void util_map_command(unsigned no, struct param_list *params)
 {
 	map_state_from_vars();
@@ -2204,6 +2215,10 @@ static void util_map_command(unsigned no, struct param_list *params)
 		break;
 	}
 	}
+	// HH2D walks there (0x407310 -> 0x403f30, views drawn by 0x401980):
+	// the corridor ends up on the screen, not in the background surface
+	if (no == 1017 || no == 1018)
+		map_view_to_screen();
 	map_state_to_vars();
 }
 
@@ -3268,11 +3283,11 @@ static void hanahebi_util(struct param_list *params)
 	case 1002:
 		// re-read the map state from the variables and redraw the view of
 		// the current spot as the background (HH2D 0x403520 -> 0x401780).
-		// Used by the load redraw (LIBLARY sub 121). Checked by loading the
-		// same saves in HH2D.exe under Wine: with no character on screen the
-		// corridor comes back (FAS003 point 1, FAS004 point 64), with one the
-		// background stays black (FAS014 point 104) -- although all three
-		// have a bg_black background record
+		// Used by the load redraw (LIBLARY sub 121), which then copies the
+		// background surface 1 to the back buffer and fades to it. Checked by
+		// loading saves in HH2D.exe under Wine: without a character the
+		// corridor comes back (FAS003, FAS004), with one the background stays
+		// black (FAS014). So the view goes to surface 1 only without characters
 		map_state_from_vars();
 		if (!char_any())
 			map_draw_view(map.floor, map_variant(), map.node, map.dir * 2, 1);
@@ -4695,6 +4710,11 @@ static void debug_save_load(void)
 		// e.g. to load the same moment in the original HH2D.exe
 		const char *only = getenv("HH_DEBUG_SAVEMES");
 		if (n != (uint32_t)atoi(e + 1) || (only && strcasecmp(only, mem_mes_name())))
+			return;
+		// HH_DEBUG_SAVENTH=k: only the k-th time (1 = first)
+		static unsigned hits = 0;
+		const char *nth = getenv("HH_DEBUG_SAVENTH");
+		if (nth && ++hits < (unsigned)atoi(nth))
 			return;
 		const char *c = strchr(e, ':');
 		unsigned slot = c ? atoi(c + 1) : 1;
