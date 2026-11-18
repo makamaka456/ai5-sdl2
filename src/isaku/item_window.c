@@ -25,8 +25,11 @@
 
 #define ITEM_WINDOW_W 320
 #define ITEM_WINDOW_H 32
-#define OVERLAY_X 160
-#define OVERLAY_Y 224
+// in-screen item bar: placed like the original window ([ITEMWIN] X/Y,
+// inside its frame); see item_overlay_create
+static int overlay_x = 4, overlay_y = 4;
+#define OVERLAY_X overlay_x
+#define OVERLAY_Y overlay_y
 struct {
 	SDL_Window *window;
 	SDL_Renderer *renderer;
@@ -38,6 +41,9 @@ struct {
 	bool lmb_down;
 	bool rmb_down;
 	bool use_overlay;
+	// in-screen mode: open but drawn "behind" the game (the original's
+	// separate window drops behind the game window when the game is clicked)
+	bool behind;
 	int selected;
 } item_window = {0};
 
@@ -61,6 +67,8 @@ static void item_window_create(void)
 static void item_overlay_create(void)
 {
 	SDL_Surface *s = gfx_get_overlay(1);
+	overlay_x = max(4, min(config.itemwin.x + 4, s->w - ITEM_WINDOW_W - 4));
+	overlay_y = max(4, min(config.itemwin.y + 4, s->h - ITEM_WINDOW_H - 4));
 	SDL_CALL(SDL_FillRect, s, NULL, SDL_MapRGBA(s->format, 0, 0, 0, 0));
 	// dark frame around the item bar only (the scene stays visible)
 	SDL_Rect r = { OVERLAY_X - 4, OVERLAY_Y - 4, ITEM_WINDOW_W + 8, ITEM_WINDOW_H + 8 };
@@ -109,6 +117,13 @@ void isaku_item_window_toggle(void)
 {
 	if (!item_window.enabled)
 		return;
+	if (item_window.opened && item_window.behind) {
+		// like clicking the original window: bring it to the front
+		item_window.behind = false;
+		gfx_overlay_enable(1);
+		isaku_item_window_update();
+		return;
+	}
 	if (item_window.opened) {
 		if (item_window.use_overlay)
 			gfx_overlay_disable(1);
@@ -116,6 +131,7 @@ void isaku_item_window_toggle(void)
 			SDL_HideWindow(item_window.window);
 		isaku_builtin_se_play("wincls.wav");
 		item_window.opened = false;
+		item_window.behind = false;
 	} else {
 		if (item_window.use_overlay)
 			gfx_overlay_enable(1);
@@ -123,6 +139,7 @@ void isaku_item_window_toggle(void)
 			SDL_ShowWindow(item_window.window);
 		isaku_builtin_se_play("winopn.wav");
 		item_window.opened = true;
+		item_window.behind = false;
 		isaku_item_window_update();
 	}
 }
@@ -227,11 +244,17 @@ static bool item_overlay_event(SDL_Event *e)
 		// next to the game, the scripts open it when the story starts)
 		float fx, fy;
 		SDL_RenderWindowToLogical(gfx.renderer, e->button.x, e->button.y, &fx, &fy);
-		bool inside = fx >= OVERLAY_X && fx < OVERLAY_X + ITEM_WINDOW_W
+		bool inside = !item_window.behind && fx >= OVERLAY_X && fx < OVERLAY_X + ITEM_WINDOW_W
 			&& fy >= OVERLAY_Y && fy < OVERLAY_Y + ITEM_WINDOW_H;
 		if (!inside) {
 			if (e->type == SDL_MOUSEBUTTONUP)
 				handle_button_event(&e->button);
+			// the game window gets the click and comes to the front:
+			// the item window stays open but is hidden behind it
+			if (e->type == SDL_MOUSEBUTTONDOWN && !item_window.behind) {
+				item_window.behind = true;
+				gfx_overlay_disable(1);
+			}
 			return false;
 		}
 		handle_button_event(&e->button);
@@ -281,6 +304,9 @@ void isaku_item_window_get_cursor_pos(int *x, int *y)
 	if (!item_window.enabled) {
 		*x = ITEM_WINDOW_W;
 		*y = ITEM_WINDOW_H;
+	} else if (item_window.use_overlay && item_window.behind) {
+		*x = ITEM_WINDOW_W;
+		*y = ITEM_WINDOW_H;
 	} else if (item_window.use_overlay) {
 		// game-screen coordinates (the window may be scaled, e.g. Android)
 		unsigned cx, cy;
@@ -321,6 +347,7 @@ void isaku_item_window_disable(void)
 		else
 			SDL_HideWindow(item_window.window);
 		item_window.opened = false;
+		item_window.behind = false;
 	}
 }
 
