@@ -15,6 +15,8 @@
  */
 
 #include <SDL.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "nulib/vector.h"
 #include "cursor.h"
@@ -820,8 +822,307 @@ static void run_delayed_close(struct popup_delayed_close *d)
 	popup_window_free(d->window);
 }
 
+/*
+ * In-screen popup menus: Android allows only one window, so the menu is drawn
+ * into an overlay of the game screen instead of its own popup window(s).
+ * Input goes through the engine's normal handling (mouse, touch, gamepad,
+ * software cursor).  Used on Android, or on PC with AI5_SINGLE_WINDOW=1.
+ */
+#define SCREEN_OVERLAY 3
+#define SCREEN_MAX_DEPTH 8
+
+// a popup opened while one is running (the game opens it from its event
+// handler on a right click): close the running one's deepest menu instead
+static bool screen_running = false;
+static bool screen_close_req = false;
+
+struct screen_menu {
+	struct menu_window w[SCREEN_MAX_DEPTH];
+	int depth;           // number of open windows (menu + submenus)
+	bool keyboard;       // last selection came from arrow keys
+};
+
+bool popup_menu_in_screen(void)
+{
+#ifdef __ANDROID__
+	return true;
+#else
+	const char *e = getenv("AI5_SINGLE_WINDOW");
+	return e && *e && *e != '0';
+#endif
+}
+
+static void screen_window_open(struct screen_menu *sm, struct menu *menu, int x, int y)
+{
+	if (sm->depth >= SCREEN_MAX_DEPTH)
+		return;
+	struct menu_window *w = &sm->w[sm->depth++];
+	memset(w, 0, sizeof(*w));
+	w->menu = menu;
+	calc_size(menu, &w->width, &w->height, &w->text_x, &w->hotkey_x);
+	// keep the whole menu on the screen
+	if (x + w->width > gfx_view.w)
+		x = max(0, gfx_view.w - w->width);
+	if (y + w->height > gfx_view.h)
+		y = max(0, gfx_view.h - w->height);
+	w->x = max(0, x);
+	w->y = max(0, y);
+	SDL_CTOR(SDL_CreateRGBSurfaceWithFormat, w->surface, 0, w->width, w->height,
+			GFX_DIRECT_BPP, GFX_DIRECT_FORMAT);
+	w->opened = true;
+	map_colors(w->surface->format);
+	calc_layout(w);
+	draw_frame(w);
+	struct menu_entry *e;
+	vector_foreach_p(e, menu->entries) {
+		draw_entry(w, e, false);
+	}
+}
+
+static void screen_window_close_to(struct screen_menu *sm, int depth)
+{
+	while (sm->depth > depth) {
+		struct menu_window *w = &sm->w[--sm->depth];
+		SDL_FreeSurface(w->surface);
+		w->surface = NULL;
+		w->opened = false;
+	}
+}
+
+static void screen_draw(struct screen_menu *sm)
+{
+	SDL_Surface *o = gfx_get_overlay(SCREEN_OVERLAY);
+	SDL_CALL(SDL_FillRect, o, NULL, SDL_MapRGBA(o->format, 0, 0, 0, 0));
+	for (int i = 0; i < sm->depth; i++) {
+		struct menu_window *w = &sm->w[i];
+		SDL_Rect r = { w->x, w->y, w->width, w->height };
+		SDL_CALL(SDL_BlitSurface, w->surface, NULL, o, &r);
+	}
+	gfx_screen_dirty();
+}
+
+static struct menu_entry *screen_entry_at(struct menu_window *w, int x, int y)
+{
+	x -= w->x;
+	y -= w->y;
+	if (x < BORDER_SIZE || x >= w->width - BORDER_SIZE
+			|| y < BORDER_SIZE || y >= w->height - BORDER_SIZE)
+		return NULL;
+	struct menu_entry *e;
+	vector_foreach_p(e, w->menu->entries) {
+		int h = e->type == MENU_ENTRY_SEPARATOR ? SEPARATOR_H : ENTRY_H;
+		if (y >= e->y && y < e->y + h)
+			return e->type == MENU_ENTRY_SEPARATOR ? NULL : e;
+	}
+	return NULL;
+}
+
+static void screen_select(struct menu_window *w, struct menu_entry *e)
+{
+	if (w->selected == e)
+		return;
+	if (w->selected)
+		draw_entry(w, w->selected, false);
+	if (e)
+		draw_entry(w, e, true);
+	w->selected = e;
+}
+
+static void screen_open_submenu(struct screen_menu *sm, int level)
+{
+	struct menu_window *p = &sm->w[level];
+	struct menu_entry *e = p->selected;
+	if (!e || e->type != MENU_ENTRY_SUBMENU || !e->active)
+		return;
+	screen_window_close_to(sm, level + 1);
+	int x = p->x + p->width - BORDER_SIZE;
+	int child_w, child_h, tx, hx;
+	calc_size(e->submenu, &child_w, &child_h, &tx, &hx);
+	if (x + child_w > gfx_view.w)
+		x = p->x - child_w + BORDER_SIZE; // no room on the right: open left
+	screen_window_open(sm, e->submenu, x, p->y + e->y - BORDER_SIZE);
+}
+
+// move the keyboard selection in the deepest window
+static void screen_key_move(struct menu_window *w, int dir)
+{
+	int n = vector_length(w->menu->entries);
+	if (!n)
+		return;
+	int cur = -1;
+	for (int i = 0; i < n; i++) {
+		if (&vector_A(w->menu->entries, i) == w->selected)
+			cur = i;
+	}
+	for (int k = 0; k < n; k++) {
+		cur = (cur + dir + n) % n;
+		struct menu_entry *e = &vector_A(w->menu->entries, cur);
+		if (e->type != MENU_ENTRY_SEPARATOR) {
+			screen_select(w, e);
+			return;
+		}
+	}
+}
+
+static bool screen_key_edge(enum input_event_type t, bool *prev)
+{
+	bool now = input_down(t);
+	bool edge = now && !*prev;
+	*prev = now;
+	return edge;
+}
+
+// run the clicked entry's action; returns true if the menu should close
+static bool screen_activate(struct screen_menu *sm, int level, struct menu_entry *e)
+{
+	if (!e || !e->active)
+		return false;
+	if (e->type == MENU_ENTRY_SUBMENU) {
+		screen_select(&sm->w[level], e);
+		screen_open_submenu(sm, level);
+		return false;
+	}
+	screen_window_close_to(sm, 0);
+	screen_draw(sm);
+	gfx_overlay_disable(SCREEN_OVERLAY);
+	screen_running = false;	// the action may open another menu
+	if (e->type == MENU_ENTRY_LABEL) {
+		if (e->label.on_click)
+			e->label.on_click(e->label.data);
+	} else if (e->type == MENU_ENTRY_RADIO) {
+		if (e->radio.on_click)
+			e->radio.on_click(e->radio.index, e->radio.data);
+	}
+	return true;
+}
+
+static void popup_menu_run_screen(struct menu *m)
+{
+	screen_running = true;
+	screen_close_req = false;
+	struct screen_menu sm = { .depth = 0 };
+	unsigned cx, cy;
+	cursor_get_pos(&cx, &cy);
+	screen_window_open(&sm, m, cx, cy);
+	gfx_overlay_enable(SCREEN_OVERLAY);
+	screen_draw(&sm);
+
+	// the click/touch that opened the menu may still be held: only react
+	// to new presses
+	bool prev[INPUT_NR_INPUTS];
+	for (int i = 0; i < INPUT_NR_INPUTS; i++)
+		prev[i] = input_down(i);
+	unsigned last_x = cx, last_y = cy;
+	uint32_t hover_t = 0;
+
+	vm_timer_t timer = vm_timer_create();
+	while (sm.depth > 0) {
+		handle_events();
+		bool changed = false;
+		unsigned x, y;
+		cursor_get_pos(&x, &y);
+		bool moved = x != last_x || y != last_y;
+		last_x = x;
+		last_y = y;
+
+		// window and entry under the cursor (deepest first)
+		int level = -1;
+		struct menu_entry *hit = NULL;
+		for (int i = sm.depth - 1; i >= 0; i--) {
+			struct menu_window *w = &sm.w[i];
+			if ((int)x >= w->x && (int)x < w->x + w->width
+					&& (int)y >= w->y && (int)y < w->y + w->height) {
+				level = i;
+				hit = screen_entry_at(w, x, y);
+				break;
+			}
+		}
+		if (moved) {
+			sm.keyboard = false;
+			if (level >= 0 && hit != sm.w[level].selected) {
+				screen_select(&sm.w[level], hit);
+				hover_t = SDL_GetTicks();
+				changed = true;
+			}
+		}
+		// hovering over a submenu entry opens it (like the window version)
+		if (!sm.keyboard && level >= 0 && hit && hit->type == MENU_ENTRY_SUBMENU
+				&& hover_t && SDL_GetTicks() - hover_t >= 200
+				&& (sm.depth <= level + 1 || sm.w[level + 1].menu != hit->submenu)) {
+			screen_open_submenu(&sm, level);
+			hover_t = 0;
+			changed = true;
+		}
+
+		struct menu_window *top = &sm.w[sm.depth - 1];
+		if (screen_key_edge(INPUT_UP, &prev[INPUT_UP])) {
+			sm.keyboard = true;
+			screen_key_move(top, -1);
+			changed = true;
+		}
+		if (screen_key_edge(INPUT_DOWN, &prev[INPUT_DOWN])) {
+			sm.keyboard = true;
+			screen_key_move(top, 1);
+			changed = true;
+		}
+		if (screen_key_edge(INPUT_RIGHT, &prev[INPUT_RIGHT])) {
+			sm.keyboard = true;
+			screen_open_submenu(&sm, sm.depth - 1);
+			changed = true;
+		}
+		if (screen_key_edge(INPUT_LEFT, &prev[INPUT_LEFT]) && sm.depth > 1) {
+			screen_window_close_to(&sm, sm.depth - 1);
+			changed = true;
+		}
+		if (screen_key_edge(INPUT_ACTIVATE, &prev[INPUT_ACTIVATE])) {
+			if (sm.keyboard) {
+				if (screen_activate(&sm, sm.depth - 1, top->selected))
+					break;
+			} else if (level >= 0) {
+				if (screen_activate(&sm, level, hit))
+					break;
+				// a click on a submenu's parent closes deeper menus
+				if (!hit || hit->type != MENU_ENTRY_SUBMENU)
+					screen_window_close_to(&sm, level + 1);
+			} else {
+				// click outside: close
+				screen_window_close_to(&sm, 0);
+			}
+			changed = true;
+		}
+		if (screen_close_req) {
+			screen_close_req = false;
+			screen_window_close_to(&sm, sm.depth - 1);
+			changed = true;
+		}
+		if (screen_key_edge(INPUT_CANCEL, &prev[INPUT_CANCEL])) {
+			// right click / back: close the deepest menu
+			screen_window_close_to(&sm, sm.depth - 1);
+			changed = true;
+		}
+		if (changed)
+			screen_draw(&sm);
+		gfx_update();
+		vm_timer_tick(&timer, 16);
+	}
+	screen_window_close_to(&sm, 0);
+	gfx_overlay_disable(SCREEN_OVERLAY);
+	screen_running = false;
+	// don't let the game see the click that closed the menu
+	_input_wait_until_up(INPUT_ACTIVATE);
+	_input_wait_until_up(INPUT_CANCEL);
+}
+
 void popup_menu_run(struct menu *m, int x, int y)
 {
+	if (popup_menu_in_screen()) {
+		if (screen_running) {
+			screen_close_req = true;
+			return;
+		}
+		popup_menu_run_screen(m);
+		return;
+	}
 	wayland = !strcmp(SDL_GetCurrentVideoDriver(), "wayland");
 
 	struct menu_window w;

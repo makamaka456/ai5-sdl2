@@ -27,6 +27,7 @@
 #include "game.h"
 #include "gfx.h"
 #include "gfx_private.h"
+#include "encoding.h"
 #include "input.h"
 #include "memory.h"
 #include "popup_menu.h"
@@ -107,6 +108,14 @@ void shuusaku_draw_text(const char *_text)
 	uint16_t x = mem_get_sysvar16(mes_sysvar16_text_cursor_x);
 	uint16_t y = mem_get_sysvar16(mes_sysvar16_text_cursor_y);
 
+	bool sjis = ai5_text_looks_sjis((const char*)text);
+	if (sjis) {
+		const char *ko = ai5_text_translate_sjis((const char*)text);
+		if (ko) {
+			text = (const uint8_t*)ko;
+			sjis = false;
+		}
+	}
 	while (*text) {
 		// '％' = newline
 		if (text[0] == 0x81 && text[1] == 0x93) {
@@ -116,14 +125,15 @@ void shuusaku_draw_text(const char *_text)
 			continue;
 		}
 		int ch;
-		bool zenkaku = SJIS_2BYTE(*text);
+		// Korean translation: CP949 text (ai5_char_* follow the encoding)
+		bool zenkaku = ai5_char_is_2byte_enc(*text, sjis);
 		uint16_t char_space = zenkaku ? 2 : 1;
 		if (x + char_space > end_x) {
 			x = start_x;
 			y += line_space;
 		}
 
-		text = (const uint8_t*)sjis_char2unicode((const char*)text, &ch);
+		text = (const uint8_t*)ai5_char_to_unicode_enc((const char*)text, &ch, sjis);
 		gfx_text_draw_glyph(x * 8, y, surface, ch);
 		x += char_space;
 	}
@@ -1447,8 +1457,8 @@ static void util_credits(struct param_list *params)
 	const char *text_p = (char*)text;
 	while (*text_p) {
 		int ch;
-		unsigned char_space = font_size / (SJIS_2BYTE(*text_p) ? 1 : 2);
-		text_p = sjis_char2unicode(text_p, &ch);
+		unsigned char_space = font_size / (ai5_char_is_2byte(*text_p) ? 1 : 2);
+		text_p = ai5_char_to_unicode(text_p, &ch);
 		gfx_text_draw_glyph(x, y, 0, ch);
 		x += char_space;
 	}
@@ -1636,15 +1646,15 @@ static void open_context_menu(void)
 {
 	struct menu *m = popup_menu_new();
 	// XXX: UI font doesn't have Japanese glyphs...
-	popup_menu_append_entry(m, 1, "Schedule" /*"スケジュール表"*/, "Space",
+	popup_menu_append_entry(m, 1, UI_TEXT("Schedule", "일정표") /*"スケジュール表"*/, "Space",
 			schedule_window_clicked, NULL);
-	popup_menu_append_entry(m, 2, "Items & Status" /*"風呂・食事＆アイテム"*/, "F1",
+	popup_menu_append_entry(m, 2, UI_TEXT("Items & Status", "목욕·식사·아이템") /*"風呂・食事＆アイテム"*/, "F1",
 			status_window_clicked, NULL);
 	popup_menu_append_separator(m);
-	popup_menu_append_entry(m, -1, "Restart", NULL, restart_clicked, NULL);
-	popup_menu_append_entry(m, -1, "Quit", "Alt+F4", quit_clicked, NULL);
+	popup_menu_append_entry(m, -1, UI_TEXT("Restart", "처음부터"), NULL, restart_clicked, NULL);
+	popup_menu_append_entry(m, -1, UI_TEXT("Quit", "종료"), "Alt+F4", quit_clicked, NULL);
 	popup_menu_append_separator(m);
-	popup_menu_append_entry(m, -1, "Cancel", NULL, NULL, NULL);
+	popup_menu_append_entry(m, -1, UI_TEXT("Cancel", "닫기"), NULL, NULL, NULL);
 
 	int win_x, win_y, mouse_x, mouse_y;
 	SDL_GetWindowPosition(gfx.window, &win_x, &win_y);

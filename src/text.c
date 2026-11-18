@@ -136,8 +136,22 @@ static char *data_path(const char *rel)
 	.rwops_outline = SDL_RWFromConstMem(font_##name, font_##name##_len), \
 }
 
+bool ui_korean(void)
+{
+#ifdef __ANDROID__
+	return true;
+#else
+	return text_encoding_is_cp949();
+#endif
+}
+
 static void init_ui_font(void)
 {
+	if (ui_korean()) {
+		// Tahoma has no Hangul
+		font_spec[FONT_UI].path = data_path("fonts/NanumGothic.ttf");
+		return;
+	}
 #ifdef EMBED_TAHOMA
 	font_spec[FONT_UI] = EMBEDDED_FONT(tahoma);
 #else

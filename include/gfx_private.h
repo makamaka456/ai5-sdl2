@@ -90,6 +90,9 @@ void _gfx_indexed_copy_masked(int src_x, int src_y, int w, int h, SDL_Surface *s
 unsigned _gfx_text_draw_glyph(SDL_Surface *dst, int x, int y, uint32_t ch);
 void ui_draw_text(SDL_Surface *s, int x, int y, const char *text, SDL_Color color);
 int ui_measure_text(const char *text);
+// UI text (popup menus) in Korean: Korean mode or Android
+bool ui_korean(void);
+#define UI_TEXT(en, ko) (ui_korean() ? (ko) : (en))
 SDL_Surface *icon_get(unsigned no);
 
 void gfx_dump_surface(unsigned i, const char *filename);

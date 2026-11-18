@@ -347,6 +347,27 @@ static struct {
 	uint32_t release_at; // tap: when to let the left button go
 } touch;
 
+/*
+ * Touch right click: send a real right mouse button event (not a touch one),
+ * so games that open a menu on the right button (e.g. Isaku's context menu,
+ * which reads SDL events directly) see it too.  handle_events() turns it into
+ * INPUT_CANCEL like any right click.
+ */
+static void push_right_button(bool down)
+{
+	SDL_Event e = {0};
+	e.type = down ? SDL_MOUSEBUTTONDOWN : SDL_MOUSEBUTTONUP;
+	e.button.timestamp = SDL_GetTicks();
+	e.button.windowID = gfx.window_id;
+	e.button.which = 0;
+	e.button.button = SDL_BUTTON_RIGHT;
+	e.button.state = down ? SDL_PRESSED : SDL_RELEASED;
+	e.button.clicks = 1;
+	SDL_GetMouseState(&e.button.x, &e.button.y);
+	if (SDL_PushEvent(&e) < 0)
+		input_key_event(INPUT_CANCEL, down);
+}
+
 static void touch_begin(int x, int y)
 {
 	touch.state = TOUCH_PENDING;
@@ -375,7 +396,7 @@ static bool touch_end(void)
 		touch.state = TOUCH_NONE;
 		return true;
 	case TOUCH_RIGHT:
-		input_key_event(INPUT_CANCEL, false);
+		push_right_button(false);
 		touch.state = TOUCH_NONE;
 		return true;
 	case TOUCH_LEFT:
@@ -395,7 +416,7 @@ static void touch_update(void)
 	}
 	if (touch.state == TOUCH_PENDING && now - touch.t >= TOUCH_HOLD_MS) {
 		touch.state = TOUCH_RIGHT;
-		input_key_event(INPUT_CANCEL, true);
+		push_right_button(true);
 	}
 }
 
@@ -461,13 +482,13 @@ void handle_events(void)
 				touch.state = TOUCH_NONE;
 				key_down[INPUT_ACTIVATE] = false;
 				key_down_timestamp[INPUT_ACTIVATE] = 0;
-				input_key_event(INPUT_CANCEL, true);
+				push_right_button(true);
 				two_finger_cancel = true;
 			}
 			break;
 		case SDL_FINGERUP:
 			if (two_finger_cancel && SDL_GetNumTouchFingers(e.tfinger.touchId) <= 1) {
-				input_key_event(INPUT_CANCEL, false);
+				push_right_button(false);
 				two_finger_cancel = false;
 			}
 			break;

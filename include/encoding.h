@@ -49,6 +49,14 @@ bool ai5_char_is_hankaku(uint8_t b);
 bool ai5_char_is_2byte(uint8_t b);
 // decode one character; returns pointer to the next character
 const char *ai5_char_to_unicode(const char *src, int *dst);
+// Korean mode: true if a whole string is untranslated Shift-JIS text (has
+// kana, no common Hangul) — Korean patches sometimes leave such lines
+bool ai5_text_looks_sjis(const char *s);
+// Korean text for a known untranslated Shift-JIS line, or NULL
+const char *ai5_text_translate_sjis(const char *s);
+// like ai5_char_is_2byte / ai5_char_to_unicode, but Shift-JIS if `sjis`
+bool ai5_char_is_2byte_enc(uint8_t b, bool sjis);
+const char *ai5_char_to_unicode_enc(const char *src, int *dst, bool sjis);
 // convert a script string to UTF-8
 string ai5_cstring_to_utf8(const char *src, size_t len);
 

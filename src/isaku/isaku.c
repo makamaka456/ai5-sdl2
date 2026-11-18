@@ -860,15 +860,15 @@ static void quit_game_clicked(void *_)
 static void open_context_menu(void)
 {
 	struct menu *m = popup_menu_new();
-	int item_id = popup_menu_append_entry(m, 1, "Item Window", "Space", item_window_clicked, NULL);
-	int save_id = popup_menu_append_entry(m, 4, "Save Data", "S", save_data_clicked, NULL);
-	int load_id = popup_menu_append_entry(m, 3, "Load Data", "L", load_data_clicked, NULL);
+	int item_id = popup_menu_append_entry(m, 1, UI_TEXT("Item Window", "아이템 창"), "Space", item_window_clicked, NULL);
+	int save_id = popup_menu_append_entry(m, 4, UI_TEXT("Save Data", "저장하기"), "S", save_data_clicked, NULL);
+	int load_id = popup_menu_append_entry(m, 3, UI_TEXT("Load Data", "불러오기"), "L", load_data_clicked, NULL);
 	popup_menu_append_separator(m);
-	int msg_id = popup_menu_append_entry(m, -1, "Hide Message", "Tab", hide_message_clicked, NULL);
+	int msg_id = popup_menu_append_entry(m, -1, UI_TEXT("Hide Message", "메시지 숨기기"), "Tab", hide_message_clicked, NULL);
 	popup_menu_append_separator(m);
 
-	const char *on_off[] = { "On", "Off" };
-	const char *fast_normal_slow[] = { "Fast", "Normal", "Slow" };
+	const char *on_off[] = { UI_TEXT("On", "켜기"), UI_TEXT("Off", "끄기") };
+	const char *fast_normal_slow[] = { UI_TEXT("Fast", "빠르게"), UI_TEXT("Normal", "보통"), UI_TEXT("Slow", "느리게") };
 
 	bool audio_enabled = vm_flag_is_on(FLAG_AUDIO_ENABLE);
 	struct menu *music = popup_menu_new();
@@ -883,16 +883,16 @@ static void open_context_menu(void)
 			move_speed_clicked, NULL);
 
 	struct menu *options = popup_menu_new();
-	popup_menu_append_submenu(options, -1, "Music", music);
-	popup_menu_append_submenu(options, -1, "Voice", voice);
+	popup_menu_append_submenu(options, -1, UI_TEXT("Music", "음악"), music);
+	popup_menu_append_submenu(options, -1, UI_TEXT("Voice", "음성"), voice);
 	//popup_menu_append_entry(options, -1, "Volume Control", NULL, NULL, NULL);
-	popup_menu_append_submenu(options, -1, "Move Speed", move_speed);
-	popup_menu_append_submenu(m, -1, "Options", options);
+	popup_menu_append_submenu(options, -1, UI_TEXT("Move Speed", "이동 속도"), move_speed);
+	popup_menu_append_submenu(m, -1, UI_TEXT("Options", "설정"), options);
 
 	popup_menu_append_separator(m);
-	popup_menu_append_entry(m, -1, "Quit Game", "Alt+F4", quit_game_clicked, NULL);
+	popup_menu_append_entry(m, -1, UI_TEXT("Quit Game", "게임 종료"), "Alt+F4", quit_game_clicked, NULL);
 	popup_menu_append_separator(m);
-	popup_menu_append_entry(m, -1, "Cancel", NULL, NULL, NULL);
+	popup_menu_append_entry(m, -1, UI_TEXT("Cancel", "닫기"), NULL, NULL, NULL);
 
 	if (!isaku_item_window_is_enabled()) {
 		popup_menu_set_active(m, item_id, false);

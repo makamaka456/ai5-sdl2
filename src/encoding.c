@@ -78,6 +78,55 @@ const char *ai5_char_to_unicode(const char *src, int *dst)
 	return src + 2;
 }
 
+bool ai5_text_looks_sjis(const char *str)
+{
+	if (!text_encoding_is_cp949())
+		return false;
+	const uint8_t *s = (const uint8_t*)str;
+	unsigned kana = 0, hangul = 0;
+	while (*s) {
+		if (s[0] < 0x81 || !s[1]) {
+			s++;
+			continue;
+		}
+		uint8_t l = s[0], t = s[1];
+		if ((l == 0x82 && t >= 0x9f && t <= 0xf1) || (l == 0x83 && t >= 0x40 && t <= 0x96))
+			kana++;
+		if (l >= 0xb0 && l <= 0xc8 && t >= 0xa1 && t <= 0xfe)
+			hangul++;
+		s += 2;
+	}
+	return kana > 0 && hangul == 0;
+}
+
+/*
+ * Korean translations of lines that Korean patches left in Japanese
+ * (Shift-JIS bytes -> CP949 bytes).  Add lines here as they are found.
+ */
+static const struct { const char *sjis, *cp949; } untranslated[] = {
+	// Doukyuusei 2 map: "アイコンで画面をクリックしてください。"
+	{ "\x83\x41\x83\x43\x83\x52\x83\x93\x82\xc5\x89\xe6\x96\xca\x82\xf0\x83\x4e\x83\x8a\x83\x62\x83\x4e\x82\xb5\x82\xc4\x82\xad\x82\xbe\x82\xb3\x82\xa2\x81\x42", "\xbe\xc6\xc0\xcc\xc4\xdc\xc0\xb8\xb7\xce\x20\xc8\xad\xb8\xe9\xc0\xbb\x20\xc5\xac\xb8\xaf\xc7\xcf\xbc\xbc\xbf\xe4\x2e" /* 아이콘으로 화면을 클릭하세요. */ },
+};
+
+const char *ai5_text_translate_sjis(const char *s)
+{
+	for (unsigned i = 0; i < sizeof(untranslated) / sizeof(*untranslated); i++) {
+		if (!strcmp(s, untranslated[i].sjis))
+			return untranslated[i].cp949;
+	}
+	return NULL;
+}
+
+bool ai5_char_is_2byte_enc(uint8_t b, bool sjis)
+{
+	return sjis ? SJIS_2BYTE(b) : ai5_char_is_2byte(b);
+}
+
+const char *ai5_char_to_unicode_enc(const char *src, int *dst, bool sjis)
+{
+	return sjis ? sjis_char2unicode(src, dst) : ai5_char_to_unicode(src, dst);
+}
+
 static string utf8_push(string s, unsigned u)
 {
 	char b[4];

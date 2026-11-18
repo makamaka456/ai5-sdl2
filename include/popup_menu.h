@@ -30,5 +30,7 @@ int popup_menu_append_submenu(struct menu *m, int icon_no, const char *label,
 		struct menu *submenu);
 void popup_menu_set_active(struct menu *m, int entry_id, bool active);
 void popup_menu_run(struct menu *m, int x, int y);
+// true when popup menus are drawn inside the game screen (Android)
+bool popup_menu_in_screen(void);
 
 #endif // AI5_POPUP_MENU_H

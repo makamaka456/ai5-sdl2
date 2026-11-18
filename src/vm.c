@@ -508,9 +508,18 @@ void vm_draw_text(const char *text, unsigned mult)
 	uint16_t x = mem_get_sysvar16(mes_sysvar16_text_cursor_x);
 	uint16_t y = mem_get_sysvar16(mes_sysvar16_text_cursor_y);
 	bool last_char_is_close = false;
+	// Korean patch: a line left in Japanese is drawn as Shift-JIS
+	bool sjis = ai5_text_looks_sjis(text);
+	if (sjis) {
+		const char *ko = ai5_text_translate_sjis(text);
+		if (ko) {
+			text = ko;
+			sjis = false;
+		}
+	}
 	while (*text) {
 		int ch;
-		bool zenkaku = ai5_char_is_2byte(*text);
+		bool zenkaku = ai5_char_is_2byte_enc(*text, sjis);
 		uint16_t this_char_space = zenkaku ? (char_space / mult): (char_space / (mult * 2));
 		uint16_t this_x = x;
 		if (x + (han_line_breaks ? this_char_space : char_space) > end_x) {
@@ -534,7 +543,7 @@ void vm_draw_text(const char *text, unsigned mult)
 			last_char_is_close = false;
 		}
 
-		text = ai5_char_to_unicode(text, &ch);
+		text = ai5_char_to_unicode_enc(text, &ch, sjis);
 		gfx_text_draw_glyph(x * mult, y, surface, ch);
 		x += this_char_space;
 	}

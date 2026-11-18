@@ -24,7 +24,12 @@
 #include "gfx_private.h"
 #include "vm.h"
 
+#include "popup_menu.h"
 #include "shuusaku.h"
+
+// one window only (Android): drawn into overlay 2 at the bottom of the screen
+#define STATUS_OVERLAY 2
+static bool status_in_screen = false;
 
 #define STATUS_WINDOW_W 640
 #define STATUS_WINDOW_H 64
@@ -118,6 +123,13 @@ static void status_window_update(void)
 {
 	if (!status.open)
 		return;
+	if (status_in_screen) {
+		SDL_Surface *o = gfx_get_overlay(STATUS_OVERLAY);
+		SDL_Rect r = { 0, gfx_view.h - STATUS_WINDOW_H, STATUS_WINDOW_W, STATUS_WINDOW_H };
+		SDL_CALL(SDL_BlitSurface, status.display, NULL, o, &r);
+		gfx_screen_dirty();
+		return;
+	}
 	SDL_CALL(SDL_UpdateTexture, status.texture, NULL, status.display->pixels,
 			status.display->pitch);
 	SDL_CALL(SDL_RenderClear, status.renderer);
@@ -127,7 +139,10 @@ static void status_window_update(void)
 
 static void status_close(void)
 {
-	SDL_HideWindow(status.window);
+	if (status_in_screen)
+		gfx_overlay_disable(STATUS_OVERLAY);
+	else
+		SDL_HideWindow(status.window);
 	audio_sysse_play("se03.wav", 0);
 	status.open = false;
 }
@@ -141,7 +156,12 @@ void shuusaku_status_window_toggle(void)
 			return;
 		status.open = true;
 		status_window_draw();
-		SDL_ShowWindow(status.window);
+		if (status_in_screen) {
+			gfx_overlay_enable(STATUS_OVERLAY);
+			status_window_update();
+		} else {
+			SDL_ShowWindow(status.window);
+		}
 		audio_sysse_play("se02.wav", 0);
 	}
 }
@@ -160,7 +180,7 @@ void shuusaku_status_update(void)
 
 bool shuusaku_status_window_event(SDL_Event *e)
 {
-	if (!status.open)
+	if (!status.open || status_in_screen)
 		return false;
 	switch (e->type) {
 	case SDL_WINDOWEVENT:
@@ -188,7 +208,10 @@ bool shuusaku_status_window_event(SDL_Event *e)
 void shuusaku_status_init(void)
 {
 	int x, y;
+	status_in_screen = popup_menu_in_screen();
 	SDL_GetWindowPosition(gfx.window, &x, &y);
+	if (status_in_screen)
+		goto surfaces;
 	SDL_CTOR(SDL_CreateWindow, status.window, "風呂・食事＆アイテム",
 			x, y, STATUS_WINDOW_W, STATUS_WINDOW_H,
 			SDL_WINDOW_HIDDEN);
@@ -200,6 +223,7 @@ void shuusaku_status_init(void)
 	SDL_CTOR(SDL_CreateTexture, status.texture, status.renderer,
 			gfx.display->format->format, SDL_TEXTUREACCESS_STATIC,
 			STATUS_WINDOW_W, STATUS_WINDOW_H);
+surfaces:
 	SDL_CTOR(SDL_CreateRGBSurfaceWithFormat, status.parts, 0,
 			STATUS_WINDOW_W, STATUS_PARTS_H,
 			GFX_INDEXED_BPP, GFX_INDEXED_FORMAT);
@@ -207,7 +231,7 @@ void shuusaku_status_init(void)
 			STATUS_WINDOW_W, STATUS_WINDOW_H,
 			GFX_DIRECT_BPP, GFX_DIRECT_FORMAT);
 
-	SDL_Surface *icon = icon_get(2);
+	SDL_Surface *icon = status_in_screen ? NULL : icon_get(2);
 	if (icon)
 		SDL_SetWindowIcon(status.window, icon);
 

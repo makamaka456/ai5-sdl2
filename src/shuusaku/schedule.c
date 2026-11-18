@@ -27,10 +27,41 @@
 #include "gfx_private.h"
 #include "vm.h"
 
+#include "popup_menu.h"
 #include "shuusaku.h"
 
 #define SCHEDULE_WINDOW_W 800
 #define SCHEDULE_WINDOW_H 376
+void schedule_window_update(void);
+
+/*
+ * Android allows only one window: the schedule is then drawn into overlay 1
+ * of the game screen, shrunk to the screen width (popup_menu_in_screen()).
+ */
+#define SCHED_OVERLAY 1
+static bool sched_in_screen = false;
+
+static SDL_Rect sched_screen_rect(void)
+{
+	int w = min(gfx_view.w, SCHEDULE_WINDOW_W);
+	int h = SCHEDULE_WINDOW_H * w / SCHEDULE_WINDOW_W;
+	SDL_Rect r = { (gfx_view.w - w) / 2, 0, w, h };
+	return r;
+}
+
+// window coordinates of the game window -> schedule coordinates; false if outside
+static bool sched_screen_pos(int wx, int wy, int *x, int *y)
+{
+	float fx, fy;
+	SDL_RenderWindowToLogical(gfx.renderer, wx, wy, &fx, &fy);
+	SDL_Rect r = sched_screen_rect();
+	if (fx < r.x || fx >= r.x + r.w || fy < r.y || fy >= r.y + r.h)
+		return false;
+	*x = (int)((fx - r.x) * SCHEDULE_WINDOW_W / r.w);
+	*y = (int)((fy - r.y) * SCHEDULE_WINDOW_H / r.h);
+	return true;
+}
+
 
 #define COL_W 80
 #define ROW_H 32
@@ -327,7 +358,10 @@ void schedule_window_draw(void)
 void schedule_window_init(void)
 {
 	int x, y;
+	sched_in_screen = popup_menu_in_screen();
 	SDL_GetWindowPosition(gfx.window, &x, &y);
+	if (sched_in_screen)
+		goto surfaces;
 	SDL_CTOR(SDL_CreateWindow, schedule.window, "スケジュール表",
 			x, y, SCHEDULE_WINDOW_W, SCHEDULE_WINDOW_H,
 			SDL_WINDOW_HIDDEN);
@@ -339,6 +373,7 @@ void schedule_window_init(void)
 	SDL_CTOR(SDL_CreateTexture, schedule.texture, schedule.renderer,
 			gfx.display->format->format, SDL_TEXTUREACCESS_STATIC,
 			SCHEDULE_WINDOW_W, SCHEDULE_WINDOW_H);
+surfaces:
 	SDL_CTOR(SDL_CreateRGBSurfaceWithFormat, schedule.parts, 0,
 			SCHEDULE_WINDOW_W, SCHEDULE_WINDOW_H,
 			GFX_INDEXED_BPP, GFX_INDEXED_FORMAT);
@@ -349,7 +384,7 @@ void schedule_window_init(void)
 			160, SCHEDULE_WINDOW_H,
 			GFX_DIRECT_BPP, GFX_DIRECT_FORMAT);
 
-	SDL_Surface *icon = icon_get(1);
+	SDL_Surface *icon = sched_in_screen ? NULL : icon_get(1);
 	if (icon)
 		SDL_SetWindowIcon(schedule.window, icon);
 
@@ -398,7 +433,10 @@ static void update_time(void)
 
 static void schedule_close(void)
 {
-	SDL_HideWindow(schedule.window);
+	if (sched_in_screen)
+		gfx_overlay_disable(SCHED_OVERLAY);
+	else
+		SDL_HideWindow(schedule.window);
 	audio_sysse_play("se03.wav", 0);
 	schedule.open = false;
 }
@@ -428,7 +466,12 @@ void shuusaku_schedule_window_toggle(void)
 			schedule.start_t = min(136, schedule.current_t) & ~1;
 		}
 		schedule_window_draw();
-		SDL_ShowWindow(schedule.window);
+		if (sched_in_screen) {
+			gfx_overlay_enable(SCHED_OVERLAY);
+			schedule_window_update();
+		} else {
+			SDL_ShowWindow(schedule.window);
+		}
 		audio_sysse_play("se02.wav", 0);
 	}
 }
@@ -439,6 +482,13 @@ void schedule_window_update(void)
 		return;
 	if (!shuusaku_subwindow_valid()) {
 		schedule_close();
+		return;
+	}
+	if (sched_in_screen) {
+		SDL_Surface *o = gfx_get_overlay(SCHED_OVERLAY);
+		SDL_Rect r = sched_screen_rect();
+		SDL_CALL(SDL_BlitScaled, schedule.display, NULL, o, &r);
+		gfx_screen_dirty();
 		return;
 	}
 	SDL_CALL(SDL_UpdateTexture, schedule.texture, NULL, schedule.display->pixels,
@@ -710,10 +760,55 @@ static void scroll_right(void)
 	}
 }
 
+static bool schedule_screen_event(SDL_Event *e)
+{
+	int x, y;
+	switch (e->type) {
+	case SDL_KEYDOWN:
+		if (e->key.windowID != gfx.window_id)
+			break;
+		switch (e->key.keysym.sym) {
+		case SDLK_LEFT:
+			scroll_left();
+			return true;
+		case SDLK_RIGHT:
+			scroll_right();
+			return true;
+		}
+		break;
+	case SDL_MOUSEBUTTONDOWN:
+		if (e->button.windowID != gfx.window_id
+				|| !sched_screen_pos(e->button.x, e->button.y, &x, &y))
+			break;
+		if (e->button.button == SDL_BUTTON_LEFT)
+			schedule_mouse_down(x, y);
+		return true;
+	case SDL_MOUSEBUTTONUP:
+		if (e->button.windowID != gfx.window_id
+				|| !sched_screen_pos(e->button.x, e->button.y, &x, &y))
+			break;
+		// right click on the schedule closes it (the window had [x])
+		if (e->button.button == SDL_BUTTON_RIGHT)
+			shuusaku_schedule_window_toggle();
+		return true;
+	case SDL_MOUSEWHEEL:
+		if (e->wheel.windowID != gfx.window_id)
+			break;
+		if (e->wheel.y < 0)
+			scroll_right();
+		else if (e->wheel.y > 0)
+			scroll_left();
+		return true;
+	}
+	return false;
+}
+
 bool shuusaku_schedule_window_event(SDL_Event *e)
 {
 	if (!schedule.open)
 		return false;
+	if (sched_in_screen)
+		return schedule_screen_event(e);
 	switch (e->type) {
 	case SDL_WINDOWEVENT:
 		if (e->window.windowID != schedule.window_id)
