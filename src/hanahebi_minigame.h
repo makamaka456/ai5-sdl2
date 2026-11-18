@@ -558,8 +558,6 @@ static void mg1_round(unsigned pattern)
 			mg1.started = true;
 			mg_wait_release();
 		}
-		if (mg_skip_keys())
-			return;
 		mg_frame();
 	}
 	mg1_loop_se_start();
@@ -611,7 +609,9 @@ static void mg1_round(unsigned pattern)
 			if (mg1.x >= MG1_STOP_X)
 				break;
 		}
-		if (!ended && (mg1.x > MG1_END_X - 1 || mg_skip_keys())) {
+		// the original ends a round only at the end of the rope (no key
+		// skips it: the launcher's skip button holds Ctrl)
+		if (!ended && mg1.x > MG1_END_X - 1) {
 			// end of the round (0x431500): grade, big mark, voice
 			ended = true;
 			if (mg1.holding)
@@ -691,9 +691,9 @@ static void mg1_end(void)
 static void util_minigame1(struct param_list *params)
 {
 	switch (param_or(params, 1, 0)) {
-	case 0: mg1_setup(params); break;
+	case 0: NOTICE("MGSTART 66"); input_touch_direct(true); mg1_setup(params); break;
 	case 1: mg1_round(param_or(params, 2, 0)); break;
-	case 2: mg1_end(); break;
+	case 2: mg1_end(); input_touch_direct(false); NOTICE("MGEND 66"); break;
 	case 3: mg1.anim_frames = param_or(params, 2, 1); break;
 	case 4:
 		mg_voice_add(vm_string_param(params, 2), param_or(params, 3, 0), 0xff);
@@ -978,8 +978,6 @@ static void mg2_round(void)
 			mg2.started = true;
 			mg_wait_release();
 		}
-		if (mg_skip_keys())
-			return;
 		mg_frame();
 	}
 	mg2.ring = 0;
@@ -1040,10 +1038,7 @@ static void mg2_round(void)
 				mem_set_var32(2, 1);
 			return;
 		}
-		if (mg_skip_keys()) {
-			mg2.rounds++;
-			return;
-		}
+
 draw:
 		mg2_draw_base();
 		mg2_draw_target();
@@ -1073,9 +1068,9 @@ static void mg2_auto(void)
 static void util_minigame2(struct param_list *params)
 {
 	switch (param_or(params, 1, 0)) {
-	case 0: mg2_setup(params); break;
+	case 0: NOTICE("MGSTART 67"); input_touch_direct(true); mg2_setup(params); break;
 	case 1: mg2_round(); break;
-	case 2: mg2_free(); mg_hide(); break;
+	case 2: mg2_free(); mg_hide(); input_touch_direct(false); NOTICE("MGEND 67"); break;
 	case 3: {
 		unsigned n = param_or(params, 2, 0) % 10;
 		mg2.tn = n;

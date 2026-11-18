@@ -51,6 +51,8 @@ enum input_event_type {
 
 void input_init(void);
 void handle_events(void);
+// touch: finger down/up = left button down/up right away (mini games)
+void input_touch_direct(bool on);
 void input_key_event(enum input_event_type type, bool down);
 bool input_down(enum input_event_type type);
 void _input_wait_until_up(enum input_event_type type);

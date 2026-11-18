@@ -407,8 +407,26 @@ static void push_right_button(bool down)
 		input_key_event(INPUT_CANCEL, down);
 }
 
+/*
+ * Direct touch (timing mini games): the finger is the left button, pressed
+ * the moment it touches and released when lifted (no tap delay, no hold =
+ * right click).
+ */
+static bool touch_direct;
+
+void input_touch_direct(bool on)
+{
+	touch_direct = on;
+}
+
 static void touch_begin(int x, int y)
 {
+	if (touch_direct) {
+		touch.state = TOUCH_LEFT;
+		touch.release_at = 0;
+		input_key_event(INPUT_ACTIVATE, true);
+		return;
+	}
 	touch.state = TOUCH_PENDING;
 	touch.t = SDL_GetTicks();
 	touch.x = x;
