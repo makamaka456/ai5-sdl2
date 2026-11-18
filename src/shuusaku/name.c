@@ -1154,7 +1154,8 @@ static void left_arrow_pressed(struct button *btn)
 static void right_arrow_pressed(struct button *btn)
 {
 	struct text_input *input = get_text_input();
-	if (input->cursor < input->nr_chars) {
+	// 5 boxes (cursor 0..4): with all 5 filled the cursor stays on the last
+	if (input->cursor < input->nr_chars && input->cursor < 4) {
 		clear_cursor(input);
 		input->cursor++;
 		draw_cursor(input);
