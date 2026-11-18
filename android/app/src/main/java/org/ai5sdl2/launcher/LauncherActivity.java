@@ -522,7 +522,7 @@ public class LauncherActivity extends Activity {
         boolean stretch = AppSettings.stretch(this, id);
         boolean hasBg = !AppSettings.backgroundPath(this, id).isEmpty();
         int shown = 0;
-        for (String[] d : AppSettings.VBUTTONS) {
+        for (String[] d : AppSettings.gameButtons(id)) {
             if (!AppSettings.btnCfg(this, id, d[0]).hidden)
                 shown++;
         }
@@ -558,11 +558,11 @@ public class LauncherActivity extends Activity {
                         gameSettings(game);
                         break;
                     case 3: {
-                        String[][] b = AppSettings.VBUTTONS;
+                        String[][] b = AppSettings.gameButtons(id);
                         boolean[] on = new boolean[b.length];
                         for (int i = 0; i < b.length; i++)
                             on[i] = !AppSettings.btnCfg(this, id, b[i][0]).hidden;
-                        AppSettings.chooseVisible(this, on, () -> {
+                        AppSettings.chooseVisible(this, id, on, () -> {
                             for (int i = 0; i < b.length; i++) {
                                 AppSettings.BtnCfg c = AppSettings.btnCfg(this, id, b[i][0]);
                                 c.hidden = !on[i] && !b[i][0].equals("gear");

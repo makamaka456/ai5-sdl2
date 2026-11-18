@@ -43,6 +43,12 @@ enum input_event_type {
 #define INPUT_LTRIGGER_BUTTON -100
 #define INPUT_RTRIGGER_BUTTON -101
 
+// gamepad-only actions that send an SDL event instead of an input state
+// (games that read SDL events directly: Isaku / Shuusaku menus, F1 status)
+#define INPUT_PAD_RCLICK ((enum input_event_type)-200)
+#define INPUT_PAD_MCLICK ((enum input_event_type)-201)
+#define INPUT_PAD_F1     ((enum input_event_type)-202)
+
 void input_init(void);
 void handle_events(void);
 void input_key_event(enum input_event_type type, bool down);

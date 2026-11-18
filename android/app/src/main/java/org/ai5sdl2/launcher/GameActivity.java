@@ -247,7 +247,11 @@ public class GameActivity extends SDLActivity {
             layer.cancelEditing();
             return;
         }
-        // back = right click (menu / cancel) in the game
+        // back = the game's menu button (ESC, or a right / middle click)
+        if (layer != null) {
+            layer.backAction();
+            return;
+        }
         onNativeKeyDown(KeyEvent.KEYCODE_ESCAPE);
         onNativeKeyUp(KeyEvent.KEYCODE_ESCAPE);
     }

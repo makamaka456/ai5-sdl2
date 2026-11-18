@@ -80,29 +80,98 @@ final class AppSettings {
     }
 
     // ------------------------------------------------------------ on-screen buttons
-    // id, label, side (left/right), y (fraction), hidden by default, x (fraction or "")
+    // All button kinds: id, label, side (left/right), y (fraction),
+    // hidden by default, x (fraction or "").  Each game uses its own subset
+    // with its own names and defaults (GAME_BUTTONS below).
     static final String[][] VBUTTONS = {
         { "menu",   "메뉴",       "right", "0.22", "0", "" },
+        { "rclick", "메뉴",       "right", "0.22", "0", "" },
+        { "mclick", "메뉴",       "right", "0.22", "0", "" },
         { "skip",   "넘기기",     "right", "0.42", "0", "" },
         { "enter",  "결정",       "right", "0.62", "1", "" },
         { "gear",   "⚙",         "right", "0.80", "0", "" },
         { "hide",   "숨기기",     "left",  "0.25", "0", "" },
         { "log",    "지난 대사",  "left",  "0.45", "0", "" },
         { "shift",  "효과 빨리",  "left",  "0.65", "1", "" },
+        { "tab",    "Tab",        "left",  "0.45", "1", "" },
+        { "f1",     "F1",         "left",  "0.45", "1", "" },
+        { "skey",   "S",          "left",  "0.65", "1", "" },
+        { "lkey",   "L",          "left",  "0.80", "1", "" },
         { "up",     "▲",         "left",  "0.62", "1", "0.13" },
         { "left",   "◀",         "left",  "0.75", "1", "0.06" },
         { "right",  "▶",         "left",  "0.75", "1", "0.20" },
         { "down",   "▼",         "left",  "0.88", "1", "0.13" },
         { "stick",  "",           "left",  "0.72", "1", "0.14" },
     };
-    // longer names for lists
-    static final String[][] VBUTTON_NAMES = {
-        { "menu", "메뉴 (ESC / 오른쪽 클릭)" }, { "skip", "넘기기 (Ctrl, 켜고 끄기)" },
-        { "enter", "결정 (Enter)" }, { "gear", "⚙ 설정" }, { "hide", "대사창 숨기기 (Space)" },
-        { "log", "지난 대사 (Backspace)" }, { "shift", "화면 효과 빨리 (Shift)" },
-        { "up", "방향키 위 ▲" }, { "left", "방향키 왼쪽 ◀" }, { "right", "방향키 오른쪽 ▶" },
-        { "down", "방향키 아래 ▼" }, { "stick", "방향 스틱 (끌어서 방향키)" },
+    // key each kind sends (for the long names in lists)
+    static final String[][] VBUTTON_KEYS = {
+        { "menu", "ESC" }, { "rclick", "오른쪽 클릭" }, { "mclick", "가운데 클릭" },
+        { "skip", "Ctrl, 켜고 끄기" }, { "enter", "Enter" }, { "gear", "" },
+        { "hide", "Space" }, { "log", "Backspace" }, { "shift", "Shift" },
+        { "tab", "Tab" }, { "f1", "F1" }, { "skey", "S" }, { "lkey", "L" },
+        { "up", "↑" }, { "left", "←" }, { "right", "→" }, { "down", "↓" },
+        { "stick", "끌어서 방향키" },
     };
+
+    /*
+     * Buttons of each game, from the keys its engine module uses:
+     * "id|name|side|y|shown"  (side/y empty = from VBUTTONS, shown 1/0).
+     * The first entry is also what the Android back key does.
+     */
+    private static final String ARROWS = "up|▲|||0;left|◀|||0;right|▶|||0;down|▼|||0;stick||||0";
+    private static final String[][] GAME_BUTTONS = {
+        { "hanahebi", "menu|메뉴|||1;skip|넘기기|||1;enter|결정|||0;gear|⚙|||1;"
+                + "hide|숨기기|||1;log|지난 대사|||1;shift|효과 빨리|||0;" + ARROWS },
+        // Isaku: right click = context menu, Space = item window,
+        // S / L = save / load, Tab = hide message, ESC = cancel
+        { "isaku", "rclick|메뉴|||1;skip|넘기기|||1;enter|결정|||0;gear|⚙|||1;"
+                + "hide|아이템 창|left|0.20|1;tab|메시지 숨기기|left|0.36|1;"
+                + "skey|저장|left|0.52|0;lkey|불러오기|left|0.68|0;"
+                + "menu|취소|right|0.62|0;shift|효과 빨리|left|0.84|0;" + ARROWS },
+        // Shuusaku: middle click = context menu, Space = schedule, F1 = status
+        { "shuusaku", "mclick|메뉴|||1;skip|넘기기|||1;enter|결정|||0;gear|⚙|||1;"
+                + "hide|일정표|left|0.20|1;f1|상태|left|0.36|1;"
+                + "menu|취소|left|0.52|1;shift|효과 빨리|left|0.68|0;" + ARROWS },
+        // Doukyuusei: Backspace is read by the scripts
+        { "doukyuusei", "menu|메뉴|||1;skip|넘기기|||1;enter|결정|||0;gear|⚙|||1;"
+                + "log|지난 대사|left|0.25|1;shift|효과 빨리|left|0.45|0;" + ARROWS },
+        { "doukyuusei2", "menu|메뉴|||1;skip|넘기기|||1;enter|결정|||0;gear|⚙|||1;"
+                + "shift|효과 빨리|left|0.25|0;" + ARROWS },
+        { "kakyuusei", "menu|메뉴|||1;skip|넘기기|||1;enter|결정|||0;gear|⚙|||1;"
+                + "shift|효과 빨리|left|0.25|0;" + ARROWS },
+        { "*", "menu|메뉴|||1;skip|넘기기|||1;enter|결정|||0;gear|⚙|||1;"
+                + "shift|효과 빨리|left|0.25|0;" + ARROWS },
+    };
+
+    // the buttons of a game, in VBUTTONS format with its own names/defaults
+    static String[][] gameButtons(String game) {
+        String spec = null;
+        for (String[] g : GAME_BUTTONS) {
+            if (g[0].equals(game) || (game != null && game.startsWith(g[0] + "-")))
+                spec = g[1];
+        }
+        if (spec == null)
+            spec = GAME_BUTTONS[GAME_BUTTONS.length - 1][1];
+        ArrayList<String[]> out = new ArrayList<>();
+        for (String item : spec.split(";")) {
+            String[] f = item.split("\\|", -1);
+            String[] base = vbutton(f[0]).clone();
+            if (!f[1].isEmpty() || f[0].equals("stick"))
+                base[1] = f[1];
+            if (!f[2].isEmpty())
+                base[2] = f[2];
+            if (!f[3].isEmpty())
+                base[3] = f[3];
+            base[4] = f[4].equals("1") ? "0" : "1";
+            out.add(base);
+        }
+        return out.toArray(new String[0][]);
+    }
+
+    // what the Android back key does in this game
+    static String backAction(String game) {
+        return gameButtons(game)[0][0];
+    }
 
     static String[] vbutton(String id) {
         for (String[] d : VBUTTONS) {
@@ -112,8 +181,23 @@ final class AppSettings {
         return VBUTTONS[0];
     }
 
-    static String vbuttonName(String id) {
-        return label(VBUTTON_NAMES, id);
+    static String[] vbutton(String game, String id) {
+        for (String[] d : gameButtons(game)) {
+            if (d[0].equals(id))
+                return d;
+        }
+        return vbutton(id);
+    }
+
+    // long name for lists: "아이템 창 (Space)"
+    static String vbuttonName(String game, String id) {
+        String n = vbutton(game, id)[1];
+        if (id.equals("gear"))
+            return "⚙ 설정";
+        if (id.equals("stick"))
+            n = "방향 스틱";
+        String k = label(VBUTTON_KEYS, id);
+        return k.isEmpty() || k.equals(id) ? n : n + " (" + k + ")";
     }
 
     // settings of one button (position as a fraction of the screen, -1 = default)
@@ -147,15 +231,15 @@ final class AppSettings {
         }
     }
 
-    static BtnCfg defaultBtn(String id) {
+    static BtnCfg defaultBtn(String game, String id) {
         BtnCfg c = new BtnCfg();
-        c.hidden = vbutton(id)[4].equals("1");
+        c.hidden = vbutton(game, id)[4].equals("1");
         return c;
     }
 
     static BtnCfg btnCfg(Context c, String game, String id) {
         String v = getStr(c, game, "btn." + id, null);
-        BtnCfg b = v != null ? BtnCfg.parse(v, defaultBtn(id)) : defaultBtn(id);
+        BtnCfg b = v != null ? BtnCfg.parse(v, defaultBtn(game, id)) : defaultBtn(game, id);
         if (id.equals("gear"))
             b.hidden = false; // the settings button is always there
         return b;
@@ -165,14 +249,16 @@ final class AppSettings {
         putStr(c, game, "btn." + id, b.serialize());
     }
 
-    // check list of the buttons to show (⚙ is always shown)
-    static void chooseVisible(Activity a, boolean[] shown, Runnable done) {
+    // check list of the buttons to show (⚙ is always shown); `shown` is
+    // indexed like gameButtons(game)
+    static void chooseVisible(Activity a, String game, boolean[] shown, Runnable done) {
+        String[][] all = gameButtons(game);
         ArrayList<String> names = new ArrayList<>();
         ArrayList<Integer> idx = new ArrayList<>();
-        for (int i = 0; i < VBUTTONS.length; i++) {
-            if (VBUTTONS[i][0].equals("gear"))
+        for (int i = 0; i < all.length; i++) {
+            if (all[i][0].equals("gear"))
                 continue;
-            names.add(vbuttonName(VBUTTONS[i][0]));
+            names.add(vbuttonName(game, all[i][0]));
             idx.add(i);
         }
         boolean[] checked = new boolean[idx.size()];
@@ -266,8 +352,64 @@ final class AppSettings {
         { "CURSOR", "마우스 커서 움직이기" }, { "DPAD", "방향키로 쓰기" }, { "DISABLED", "쓰지 않기" },
     };
 
+    // engine action of each on-screen button kind (gamepad mapping)
+    private static final String[][] BUTTON_PAD_ACTION = {
+        { "menu", "ESCAPE" }, { "rclick", "RCLICK" }, { "mclick", "MCLICK" },
+        { "skip", "CTRL" }, { "enter", "ENTER" }, { "hide", "SPACE" },
+        { "log", "BACKSPACE" }, { "shift", "SHIFT" }, { "tab", "TAB" },
+        { "f1", "F1" }, { "skey", "S" }, { "lkey", "L" },
+    };
+
+    // gamepad actions of a game, named like its on-screen buttons
+    static String[][] padActions(String game) {
+        ArrayList<String[]> out = new ArrayList<>();
+        out.add(new String[] { "LMOUSE", "마우스 왼쪽 클릭" });
+        for (String[] b : gameButtons(game)) {
+            String act = label(BUTTON_PAD_ACTION, b[0]);
+            if (act.equals(b[0]))
+                continue; // gear, arrows, stick
+            String name = vbuttonName(game, b[0]);
+            if (act.equals("CTRL"))
+                name = b[1] + " (누르는 동안 Ctrl)";
+            out.add(new String[] { act, name });
+        }
+        out.add(new String[] { "UP", "위" });
+        out.add(new String[] { "DOWN", "아래" });
+        out.add(new String[] { "LEFT", "왼쪽" });
+        out.add(new String[] { "RIGHT", "오른쪽" });
+        out.add(new String[] { "NONE", "없음" });
+        return out.toArray(new String[0][]);
+    }
+
+    // per-game default gamepad layout ("BUTTON=ACTION;..." over PAD_DEFAULTS)
+    private static final String[][] GAME_PAD_DEFAULTS = {
+        { "isaku", "START=RCLICK;Y=SPACE;LEFTSHOULDER=TAB;LEFTTRIGGER=S;RIGHTTRIGGER=L" },
+        { "shuusaku", "START=MCLICK;Y=SPACE;LEFTSHOULDER=F1;LEFTTRIGGER=NONE;RIGHTTRIGGER=NONE" },
+        { "doukyuusei", "Y=NONE;RIGHTTRIGGER=NONE" },
+        { "hanahebi", "" },
+        { "*", "Y=NONE;LEFTSHOULDER=NONE;LEFTTRIGGER=NONE;RIGHTTRIGGER=NONE" },
+    };
+
+    static String padDefault(String game, int i) {
+        String spec = null;
+        for (String[] g : GAME_PAD_DEFAULTS) {
+            if (g[0].equals(game) || (game != null && game.startsWith(g[0] + "-")))
+                spec = g[1];
+        }
+        if (spec == null)
+            spec = GAME_PAD_DEFAULTS[GAME_PAD_DEFAULTS.length - 1][1];
+        for (String kv : spec.split(";")) {
+            int eq = kv.indexOf('=');
+            if (eq > 0 && kv.substring(0, eq).equals(PAD_BUTTONS[i][0]))
+                return kv.substring(eq + 1);
+        }
+        return PAD_DEFAULTS[i];
+    }
+
     static String padValue(Context c, String game, int i) {
-        return getStr(c, game, "pad." + PAD_BUTTONS[i][0], PAD_DEFAULTS[i]);
+        // per game only: the old launcher-wide value used ESC for every menu
+        String v = prefs(c).getString(gk(game, "pad." + PAD_BUTTONS[i][0]), null);
+        return v != null ? v : padDefault(game, i);
     }
 
     static String stickValue(Context c, String game, boolean left) {
@@ -302,7 +444,7 @@ final class AppSettings {
         int n = PAD_BUTTONS.length;
         String[] items = new String[n + 6];
         for (int i = 0; i < n; i++)
-            items[i] = PAD_BUTTONS[i][1] + "  →  " + label(PAD_ACTIONS, padValue(a, game, i));
+            items[i] = PAD_BUTTONS[i][1] + "  →  " + label(padActions(game), padValue(a, game, i));
         items[n] = "왼쪽 스틱  →  " + label(STICK_MODES, stickValue(a, game, true));
         items[n + 1] = "오른쪽 스틱  →  " + label(STICK_MODES, stickValue(a, game, false));
         items[n + 2] = "커서 속도  →  " + speedValue(a, game);
@@ -330,7 +472,7 @@ final class AppSettings {
                             padSettings(a, game, onChange);
                         }, () -> padSettings(a, game, onChange));
                     } else {
-                        padDeserialize(a, game, defaultPadString());
+                        padDeserialize(a, game, defaultPadString(game));
                         changed(onChange);
                         padSettings(a, game, onChange);
                     }
@@ -339,10 +481,10 @@ final class AppSettings {
                 .show();
     }
 
-    static String defaultPadString() {
+    static String defaultPadString(String game) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < PAD_BUTTONS.length; i++)
-            sb.append("pad.").append(PAD_BUTTONS[i][0]).append('=').append(PAD_DEFAULTS[i]).append(';');
+            sb.append("pad.").append(PAD_BUTTONS[i][0]).append('=').append(padDefault(game, i)).append(';');
         sb.append("pad.LEFTANALOG=CURSOR;pad.RIGHTANALOG=DPAD;pad.CURSORSPEED=16;");
         return sb.toString();
     }
@@ -426,13 +568,14 @@ final class AppSettings {
     }
 
     private static void chooseAction(Activity a, String game, int button, Runnable onChange) {
-        String[] labels = new String[PAD_ACTIONS.length];
+        String[][] acts = padActions(game);
+        String[] labels = new String[acts.length];
         for (int i = 0; i < labels.length; i++)
-            labels[i] = PAD_ACTIONS[i][1];
+            labels[i] = acts[i][1];
         new AlertDialog.Builder(a)
                 .setTitle(PAD_BUTTONS[button][1] + " 버튼")
                 .setItems(labels, (d, which) -> {
-                    putStr(a, game, "pad." + PAD_BUTTONS[button][0], PAD_ACTIONS[which][0]);
+                    putStr(a, game, "pad." + PAD_BUTTONS[button][0], acts[which][0]);
                     changed(onChange);
                     padSettings(a, game, onChange);
                 })

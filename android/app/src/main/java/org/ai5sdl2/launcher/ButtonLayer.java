@@ -31,7 +31,7 @@ final class ButtonLayer {
         void onEditEnd();     // the editor was closed (applied or cancelled)
     }
 
-    private static final String[][] BUTTONS = AppSettings.VBUTTONS;
+    private final String[][] BUTTONS; // this game's buttons
 
     private final Activity a;
     private final FrameLayout overlay;
@@ -55,6 +55,7 @@ final class ButtonLayer {
         this.overlay = overlay;
         this.game = game;
         this.host = host;
+        this.BUTTONS = AppSettings.gameButtons(game);
         overlay.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
             if (r - l != or - ol || b - t != ob - ot)
                 v.post(this::placeButtons);
@@ -67,12 +68,12 @@ final class ButtonLayer {
                 a.getResources().getDisplayMetrics());
     }
 
-    private static String[] def(String id) {
-        return AppSettings.vbutton(id);
+    private String[] def(String id) {
+        return AppSettings.vbutton(game, id);
     }
 
-    private static BtnCfg defaultCfg(String id) {
-        return AppSettings.defaultBtn(id);
+    private BtnCfg defaultCfg(String id) {
+        return AppSettings.defaultBtn(game, id);
     }
 
     private BtnCfg savedCfg(String id) {
@@ -226,6 +227,13 @@ final class ButtonLayer {
             return;
         switch (id) {
         case "menu":  tapKey(KeyEvent.KEYCODE_ESCAPE); break;
+        // the engine turns F9 / F8 into a right / middle mouse click
+        case "rclick": tapKey(KeyEvent.KEYCODE_F9); break;
+        case "mclick": tapKey(KeyEvent.KEYCODE_F8); break;
+        case "tab":   tapKey(KeyEvent.KEYCODE_TAB); break;
+        case "f1":    tapKey(KeyEvent.KEYCODE_F1); break;
+        case "skey":  tapKey(KeyEvent.KEYCODE_S); break;
+        case "lkey":  tapKey(KeyEvent.KEYCODE_L); break;
         case "skip":  setSkip(!ctrlHeld); break;
         case "hide":  tapKey(KeyEvent.KEYCODE_SPACE); break;
         case "log":   tapKey(KeyEvent.KEYCODE_DEL); break;
@@ -233,6 +241,11 @@ final class ButtonLayer {
         case "shift": tapKey(KeyEvent.KEYCODE_SHIFT_LEFT); break;
         case "gear":  host.onGear(); break;
         }
+    }
+
+    // the game's own "menu" action (Android back key)
+    void backAction() {
+        onButton(AppSettings.backAction(game));
     }
 
     void buildButtons() {
@@ -392,7 +405,7 @@ final class ButtonLayer {
             boolean[] shown = new boolean[BUTTONS.length];
             for (int i = 0; i < BUTTONS.length; i++)
                 shown[i] = !stage.get(BUTTONS[i][0]).hidden;
-            AppSettings.chooseVisible(a, shown, () -> {
+            AppSettings.chooseVisible(a, game, shown, () -> {
                 for (int i = 0; i < BUTTONS.length; i++)
                     stage.get(BUTTONS[i][0]).hidden = !shown[i] && !BUTTONS[i][0].equals("gear");
                 buildButtons();
@@ -514,7 +527,7 @@ final class ButtonLayer {
                     + "연한 버튼 = 숨겨진 버튼 ([표시할 버튼]에서 고르기)");
         } else {
             BtnCfg c = stage.get(selected);
-            panelTitle.setText("[" + AppSettings.vbuttonName(selected) + "]" + (c.hidden ? " (숨김)" : "")
+            panelTitle.setText("[" + AppSettings.vbuttonName(game, selected) + "]" + (c.hidden ? " (숨김)" : "")
                     + "\n투명도 " + c.alpha + "%  ·  크기 " + c.size + "%");
             alphaBar.setProgress(c.alpha - 10);
             sizeBar.setProgress(c.size - 60);

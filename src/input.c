@@ -109,6 +109,12 @@ enum input_event_type parse_input_event_type(const char *str)
 		return INPUT_S;
 	if (!strcasecmp(str, "TAB"))
 		return INPUT_TAB;
+	if (!strcasecmp(str, "RCLICK"))
+		return INPUT_PAD_RCLICK;
+	if (!strcasecmp(str, "MCLICK"))
+		return INPUT_PAD_MCLICK;
+	if (!strcasecmp(str, "F1"))
+		return INPUT_PAD_F1;
 	return INPUT_NONE;
 }
 
@@ -225,11 +231,30 @@ static void mouse_event(SDL_MouseButtonEvent *ev, bool down)
 		key_down_timestamp[type] = SDL_GetTicks();
 }
 
+static void push_mouse_button(int button, bool down);
+
 static void controller_button_event(SDL_ControllerButtonEvent *ev)
 {
 	bool down = ev->type == SDL_CONTROLLERBUTTONDOWN;
 	enum input_event_type type = input_event_from_controller_button(ev->button);
 	if (type == INPUT_NONE)
+		return;
+	if (type == INPUT_PAD_RCLICK || type == INPUT_PAD_MCLICK) {
+		push_mouse_button(type == INPUT_PAD_RCLICK ? SDL_BUTTON_RIGHT
+				: SDL_BUTTON_MIDDLE, down);
+		return;
+	}
+	if (type == INPUT_PAD_F1) {
+		SDL_Event e = {0};
+		e.type = down ? SDL_KEYDOWN : SDL_KEYUP;
+		e.key.windowID = gfx.window_id;
+		e.key.state = down ? SDL_PRESSED : SDL_RELEASED;
+		e.key.keysym.sym = SDLK_F1;
+		e.key.keysym.scancode = SDL_SCANCODE_F1;
+		SDL_PushEvent(&e);
+		return;
+	}
+	if ((int)type < 0 || type >= INPUT_NR_INPUTS)
 		return;
 	key_down[type] = down;
 	if (down)
@@ -353,6 +378,20 @@ static struct {
  * which reads SDL events directly) see it too.  handle_events() turns it into
  * INPUT_CANCEL like any right click.
  */
+static void push_mouse_button(int button, bool down)
+{
+	SDL_Event e = {0};
+	e.type = down ? SDL_MOUSEBUTTONDOWN : SDL_MOUSEBUTTONUP;
+	e.button.timestamp = SDL_GetTicks();
+	e.button.windowID = gfx.window_id;
+	e.button.which = 0;
+	e.button.button = button;
+	e.button.state = down ? SDL_PRESSED : SDL_RELEASED;
+	e.button.clicks = 1;
+	SDL_GetMouseState(&e.button.x, &e.button.y);
+	SDL_PushEvent(&e);
+}
+
 static void push_right_button(bool down)
 {
 	SDL_Event e = {0};
@@ -433,6 +472,14 @@ void handle_events(void)
 		case SDL_KEYDOWN:
 			if (e.key.windowID != gfx.window_id)
 				break;
+			// on-screen buttons (Android launcher): F9 = right click,
+			// F8 = middle click (e.g. Isaku / Shuusaku menus)
+			if (e.key.keysym.sym == SDLK_F9 || e.key.keysym.sym == SDLK_F8) {
+				if (!e.key.repeat)
+					push_mouse_button(e.key.keysym.sym == SDLK_F9
+						? SDL_BUTTON_RIGHT : SDL_BUTTON_MIDDLE, true);
+				break;
+			}
 			key_event(&e.key, true);
 			switch (e.key.keysym.sym) {
 			case SDLK_F10:    gfx_screenshot(); break;
@@ -445,6 +492,11 @@ void handle_events(void)
 		case SDL_KEYUP:
 			if (e.key.windowID != gfx.window_id)
 				break;
+			if (e.key.keysym.sym == SDLK_F9 || e.key.keysym.sym == SDLK_F8) {
+				push_mouse_button(e.key.keysym.sym == SDLK_F9
+					? SDL_BUTTON_RIGHT : SDL_BUTTON_MIDDLE, false);
+				break;
+			}
 			key_event(&e.key, false);
 			break;
 		case SDL_MOUSEBUTTONDOWN:
