@@ -60,6 +60,8 @@ public class GameActivity extends SDLActivity {
         // fonts are copied to <files>/fonts by the launcher
         nativeSetenv("AI5_DATA_DIR", getFilesDir().getAbsolutePath());
         nativeSetenv("SDL_ANDROID_TRAP_BACK_BUTTON", "1");
+        // saves go to <game folder>/launcher-save, apart from the PC saves
+        nativeSetenv("AI5_SAVE_DIR", "launcher-save");
         applyPadSettings();
         applyDisplaySettings();
         ArrayList<String> args = new ArrayList<>();

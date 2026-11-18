@@ -199,6 +199,8 @@ SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./build/ai5 <게임폴더>
 - 화면 비율·배경화면 바로 반영: 엔진이 이벤트 처리 때마다 AI5_STRETCH/AI5_BACKGROUND를 비교해 바뀌면 전체 다시 그림(`gfx_check_display_env`). 배경화면 값은 "경로#파일시각"이라 같은 이름으로 새 그림을 저장해도 다시 읽음
 - 게임 화면: 가상 버튼(오른쪽 메뉴·넘기기·⚙, 왼쪽 숨기기·지난 대사, 선택: 결정·효과 빨리), ⚙ = 화면 비율·배경화면·버튼 크기/투명도/위치(끌어서)·게임패드·버튼 숨기기·끝내기
 - **터치·스틱 커서** (2026-11-16, 모든 게임 공통, `src/input.c`·`cursor.c`·`gfx.c`): 터치 탭 = 손 뗄 때 왼쪽 클릭(80ms 눌림), 0.5초 가만히 누르기 = 오른쪽 클릭, 24px 넘게 움직이면 끌기(왼쪽 누름 유지), 두 손가락 탭 = 오른쪽 클릭. 안드로이드에서 스틱이 CURSOR면 SDL 마우스 이동 대신 **엔진 자체 커서**(`cursor_virtual_*`, 화면에 흰 화살표)를 움직이고 cursor_get_pos가 그 위치를 돌려줌 → 결정 버튼이 그 자리 클릭. 터치·실제 마우스 움직임이 있으면 자체 커서는 꺼짐. PC 시험: `AI5_DEBUG_VCURSOR="x,y"`(스크린샷 확인: 타이틀 버튼 강조·Enter로 선택). 폰 실기 확인 필요
+- **저장 폴더** (2026-11-18): `AI5_SAVE_DIR`(런처는 "launcher-save") → 모든 게임의 저장이 게임 폴더 안 그 폴더로. 게임과 함께 온 FLAG 파일은 처음에 복사만(원본 안 바뀜). 꽃과뱀도 SAVEHANAHEBI 대신 이 폴더
+- **목록 합치기** (2026-11-18): 런처는 게임당 한 줄, [설정] "언어: 자동/한글판/일본어판". 한글판 표시 파일 유작 Isaku98.ini·취작 AIWINK.INI·동급생2 AI5J2K.INI(엔진 한글판 INI 찾기에도 추가)
 - 엔진 환경 변수: `AI5_STRETCH`(1=꽉 채우기), `AI5_BACKGROUND`(PNG 경로[#버전], 화면 전체 배경), `AI5_CONTROLLER`(게임패드) — 모두 게임 중 바뀌면 바로 반영
 - 서명: 고정 키 `android/ai5-launcher.keystore`(비밀번호 ai5launcher, 일부러 공개. 덮어 설치가 되게 하려는 것). 키를 바꾸면 사용자가 앱을 지우고 다시 설치해야 함
 - 고정 다운로드 주소: 브랜치에 푸시하면 Releases의 `android-latest`(사전 출시)에 `ai5-launcher.apk`가 올라감 → https://github.com/makamaka456/ai5-sdl2/releases/tag/android-latest

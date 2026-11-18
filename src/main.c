@@ -809,6 +809,8 @@ int main(int argc, char *argv[])
 		ini_name = path_get_icase("Isaku98.ini");
 		if (!ini_name)
 			ini_name = path_get_icase("AIWINK.INI");
+		if (!ini_name)	// Doukyuusei 2 Korean translation (HMES.ARC etc.)
+			ini_name = path_get_icase("AI5J2K.INI");
 	}
 	if (!ini_name) {
 		// try AI5ENG.INI first (YU-NO Eng TL)

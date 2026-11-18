@@ -18,6 +18,13 @@
 #define AI5_SAVEDATA_H
 
 /*
+ * Save folder from AI5_SAVE_DIR (created if missing), or NULL when unset.
+ * savedata_path() returns a malloc'd path of a save file in that folder.
+ */
+const char *savedata_dir(void);
+char *savedata_path(const char *save_name);
+
+/*
  * Read bytes from a save file into a buffer.
  * `off` is both a read offset into the file, and a write offset into the buffer.
  */

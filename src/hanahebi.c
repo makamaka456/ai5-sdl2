@@ -4680,6 +4680,11 @@ static const char *save_path(const char *fmt, unsigned no)
 {
 	static char dir[1024] = "";
 	static char path[1100];
+	if (!dir[0] && savedata_dir()) {
+		// launcher save folder (AI5_SAVE_DIR): kept apart from the
+		// original game's SAVEHANAHEBI folder
+		snprintf(dir, sizeof(dir), "%s", savedata_dir());
+	}
 	if (!dir[0]) {
 		char *d = path_get_icase(SAVE_DIR);
 		if (!d) {

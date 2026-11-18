@@ -48,22 +48,22 @@ public class LauncherActivity extends Activity {
     private static final int REQ_IMAGE = 3;
     private static final String PREFS = "launcher";
 
-    // games supported by the engine: id (--game=), name shown, note
+    // games supported by the engine: id (--game=), name shown, note,
+    // file that marks the Korean translation ("" = no Korean version or the
+    // engine detects it itself).  One row per game: Korean / Japanese is
+    // chosen automatically from the folder or in the game's [설정].
     static final String[][] GAMES = {
-        { "hanahebi",           "꽃과뱀 (花と蛇)",                 "한글패치판·일본어판 자동 감지" },
-        { "isaku-korean",       "유작 한글판",                      "Isaku98.ini, Patch 폴더" },
-        { "isaku",              "유작 리뉴얼 (일본어판)",           "" },
-        { "shuusaku-korean",    "취작 한글판",                      "시험 중" },
-        { "shuusaku",           "취작 (일본어판)",                  "" },
-        { "doukyuusei2-korean", "동급생2 한글판",                   "시험 중" },
-        { "doukyuusei2",        "동급생2 (일본어판)",               "" },
-        { "doukyuusei",         "동급생 Windows판",                 "" },
-        { "kakyuusei",          "하급생",                           "" },
-        { "aishimai",           "애자매 ～두 사람의 과실～",        "" },
-        { "yuno",               "YU-NO (일본어판)",                 "" },
-        { "yuno-eng",           "YU-NO (영문 패치판)",              "" },
-        { "beyond",             "비욘드 (ビ・ヨンド)",              "" },
-        { "shangrlia",          "샹그릴라 (SHANGRLIA)",             "" },
+        { "hanahebi",           "꽃과뱀 (花と蛇)",                 "한글패치판·일본어판 자동 감지", "" },
+        { "isaku",              "유작 리뉴얼",                      "", "Isaku98.ini" },
+        { "shuusaku",           "취작",                             "", "AIWINK.INI" },
+        { "doukyuusei2",        "동급생2",                          "", "AI5J2K.INI" },
+        { "doukyuusei",         "동급생 Windows판",                 "", "" },
+        { "kakyuusei",          "하급생",                           "", "" },
+        { "aishimai",           "애자매 ～두 사람의 과실～",        "", "" },
+        { "yuno",               "YU-NO (일본어판)",                 "", "" },
+        { "yuno-eng",           "YU-NO (영문 패치판)",              "", "" },
+        { "beyond",             "비욘드 (ビ・ヨンド)",              "", "" },
+        { "shangrlia",          "샹그릴라 (SHANGRLIA)",             "", "" },
     };
 
     private ArrayAdapter<String> adapter;
@@ -74,6 +74,7 @@ public class LauncherActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        migrateKoreanRows();
         copyFonts();
         buildUi();
     }
@@ -88,6 +89,82 @@ public class LauncherActivity extends Activity {
 
     private SharedPreferences prefs() {
         return AppSettings.prefs(this);
+    }
+
+    // ---------------------------------------------------------------- language
+
+    // Before v0.6 the Korean versions had their own rows ("<game>-korean").
+    // Move their folder and settings to the game's single row (once).
+    private void migrateKoreanRows() {
+        SharedPreferences p = prefs();
+        if (p.getBoolean("migrated.korean_rows", false))
+            return;
+        SharedPreferences.Editor e = p.edit();
+        for (String[] g : GAMES) {
+            if (g[3].isEmpty())
+                continue;
+            String ko = g[0] + "-korean";
+            String koFolder = p.getString("folder." + ko, null);
+            if (koFolder != null) {
+                // the user reads Korean: the Korean folder wins
+                e.putString("folder." + g[0], koFolder);
+                e.remove("folder." + ko);
+            }
+            String prefix = "g." + ko + ".";
+            for (java.util.Map.Entry<String, ?> en : p.getAll().entrySet()) {
+                String k = en.getKey();
+                if (!k.startsWith(prefix))
+                    continue;
+                String nk = "g." + g[0] + "." + k.substring(prefix.length());
+                Object v = en.getValue();
+                if (!p.contains(nk)) {
+                    if (v instanceof String) e.putString(nk, (String) v);
+                    else if (v instanceof Boolean) e.putBoolean(nk, (Boolean) v);
+                    else if (v instanceof Integer) e.putInt(nk, (Integer) v);
+                    else if (v instanceof Float) e.putFloat(nk, (Float) v);
+                    else if (v instanceof Long) e.putLong(nk, (Long) v);
+                }
+                e.remove(k);
+            }
+            File koBg = AppSettings.backgroundFile(this, ko);
+            File bg = AppSettings.backgroundFile(this, g[0]);
+            if (koBg.exists()) {
+                if (!bg.exists())
+                    koBg.renameTo(bg);
+                else
+                    koBg.delete();
+            }
+        }
+        e.putBoolean("migrated.korean_rows", true);
+        e.commit();
+    }
+
+    // language setting: "auto" (default), "ko" or "ja"
+    private String langOf(int game) {
+        return prefs().getString(AppSettings.gk(GAMES[game][0], "lang"), "auto");
+    }
+
+    private void setLang(int game, String lang) {
+        prefs().edit().putString(AppSettings.gk(GAMES[game][0], "lang"), lang).commit();
+    }
+
+    // true if the folder holds the Korean translation (marker file)
+    private boolean detectKorean(int game, File dir) {
+        return !GAMES[game][3].isEmpty() && dir != null && hasFile(dir, GAMES[game][3]);
+    }
+
+    private boolean runKorean(int game) {
+        String l = langOf(game);
+        if (l.equals("ko"))
+            return true;
+        if (l.equals("ja"))
+            return false;
+        String f = folderOf(game);
+        return f != null && detectKorean(game, new File(f));
+    }
+
+    private static String langName(String l) {
+        return l.equals("ko") ? "한글판" : l.equals("ja") ? "일본어판" : "자동";
     }
 
     private String folderOf(int i) {
@@ -350,8 +427,10 @@ public class LauncherActivity extends Activity {
             warn = "꽃과뱀 폴더에는 HH2D.exe가 있어야 합니다.";
         else if (!hasFile(dir, "AI5WIN.EXE") && !hasFile(dir, "HH2D.exe"))
             warn = "AI5WIN.EXE가 없습니다. 게임 폴더가 맞는지 확인하세요.";
-        else if (id.equals("isaku-korean") && !hasFile(dir, "Isaku98.ini"))
-            warn = "유작 한글판 폴더에는 Isaku98.ini가 있어야 합니다.";
+        else if (langOf(game).equals("ko") && !GAMES[game][3].isEmpty()
+                && !hasFile(dir, GAMES[game][3]))
+            warn = "언어가 한글판으로 지정되어 있지만 " + GAMES[game][3]
+                    + "이(가) 없습니다. 한글패치가 된 폴더인지 확인하세요.";
         setFolder(game, dir.getAbsolutePath());
         status("");
         if (warn != null) {
@@ -390,7 +469,8 @@ public class LauncherActivity extends Activity {
         }
         Intent i = new Intent(this, GameActivity.class);
         i.putExtra(GameActivity.EXTRA_PATH, folder);
-        i.putExtra(GameActivity.EXTRA_ARGS, new String[] { "--game=" + GAMES[game][0] });
+        String gameArg = GAMES[game][0] + (runKorean(game) ? "-korean" : "");
+        i.putExtra(GameActivity.EXTRA_ARGS, new String[] { "--game=" + gameArg });
         i.putExtra(GameActivity.EXTRA_GAME, GAMES[game][0]);
         startActivity(i);
     }
@@ -411,7 +491,17 @@ public class LauncherActivity extends Activity {
         t1.setText(GAMES[pos][1]);
         t1.setTextSize(17);
         t1.setTextColor(folder != null ? Color.WHITE : 0xFF999999);
-        String note = GAMES[pos][2].isEmpty() ? "" : "  (" + GAMES[pos][2] + ")";
+        String noteText = GAMES[pos][2];
+        if (!GAMES[pos][3].isEmpty()) {
+            // Korean / Japanese: what will run, and whether it was detected
+            String l = langOf(pos);
+            if (folder != null)
+                noteText = (runKorean(pos) ? "한글판" : "일본어판")
+                        + (l.equals("auto") ? " 자동 감지" : " 지정");
+            else
+                noteText = "한글판·일본어판 자동 감지";
+        }
+        String note = noteText.isEmpty() ? "" : "  (" + noteText + ")";
         t2.setText((folder != null ? folder : "폴더 미지정 — 눌러서 게임 폴더 고르기") + note);
         t2.setTextSize(12);
         t2.setTextColor(folder != null ? 0xFF9AD29A : 0xFF888888);
@@ -446,6 +536,11 @@ public class LauncherActivity extends Activity {
             AppSettings.supportsOpenAll(id)
                     ? "회상·감상 처음부터 열기: " + (AppSettings.openAll(this, id) ? "켜짐" : "꺼짐") + "  (누르면 바꾸기)"
                     : "회상·감상 처음부터 열기: 이 게임은 아직 지원 안 함",
+            GAMES[game][3].isEmpty()
+                    ? "언어: 자동 (이 게임은 엔진이 판단)"
+                    : "언어: " + langName(langOf(game))
+                            + (langOf(game).equals("auto") ? " → 지금 " + (runKorean(game) ? "한글판" : "일본어판") : "")
+                            + "  (누르면 고르기)",
         };
         new AlertDialog.Builder(this)
                 .setTitle(GAMES[game][1] + " 설정")
@@ -492,9 +587,35 @@ public class LauncherActivity extends Activity {
                             AppSettings.setOpenAll(this, id, !AppSettings.openAll(this, id));
                         gameSettings(game);
                         break;
+                    case 7:
+                        if (GAMES[game][3].isEmpty())
+                            gameSettings(game);
+                        else
+                            chooseLang(game);
+                        break;
                     }
                 })
                 .setNegativeButton("닫기", null)
+                .show();
+    }
+
+    private void chooseLang(int game) {
+        String[] codes = { "auto", "ko", "ja" };
+        String[] names = {
+            "자동 (폴더에 " + GAMES[game][3] + "이(가) 있으면 한글판)",
+            "한글판",
+            "일본어판",
+        };
+        int cur = java.util.Arrays.asList(codes).indexOf(langOf(game));
+        new AlertDialog.Builder(this)
+                .setTitle(GAMES[game][1] + " 언어")
+                .setSingleChoiceItems(names, cur, (d, w) -> {
+                    setLang(game, codes[w]);
+                    d.dismiss();
+                    adapter.notifyDataSetChanged();
+                    gameSettings(game);
+                })
+                .setNegativeButton("취소", (d, w) -> gameSettings(game))
                 .show();
     }
 
