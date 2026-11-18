@@ -26,6 +26,7 @@
 #include "asset.h"
 #include "audio.h"
 #include "cursor.h"
+#include "encoding.h"
 #include "debug.h"
 #include "game.h"
 #include "gfx.h"
@@ -85,6 +86,13 @@ static uint8_t *write_digit(uint8_t *buf, int n, bool halfwidth)
 	if (halfwidth) {
 		buf[0] = '0' + n;
 		return buf + 1;
+	}
+	if (text_encoding_is_cp949()) {
+		// Korean patches: CP949 fullwidth digits (the SJIS ones turn into
+		// broken hangul, e.g. Shuusaku's diary time "[토요일오후궯궯시]")
+		buf[0] = 0xa3;
+		buf[1] = 0xb0 + n;
+		return buf + 2;
 	}
 	buf[0] = 0x82;
 	buf[1] = 0x4f + n;
