@@ -34,6 +34,21 @@ static unsigned cp949_lookup(uint8_t lead, uint8_t trail)
 	return cp949_table[lead - 0x81][trail - 0x41];
 }
 
+// Unicode -> CP949 two-byte code (0 if not in the table); linear search,
+// only used for short strings (e.g. Shuusaku's name input)
+unsigned unicode_to_cp949(unsigned u)
+{
+	if (u < 0x80)
+		return u;
+	for (unsigned lead = 0x81; lead <= 0xfe; lead++) {
+		for (unsigned trail = 0x41; trail <= 0xfe; trail++) {
+			if (cp949_table[lead - 0x81][trail - 0x41] == u)
+				return (lead << 8) | trail;
+		}
+	}
+	return 0;
+}
+
 bool ai5_char_is_zenkaku(uint8_t b)
 {
 	if (text_encoding_is_cp949())

@@ -21,6 +21,7 @@
 
 #include "anim.h"
 #include "cursor.h"
+#include "encoding.h"
 #include "gfx.h"
 #include "gfx_private.h"
 #include "input.h"
@@ -681,11 +682,87 @@ static const struct kanji_block kanji[] = {
 };
 
 /*
+ * Korean patch: the "한글" screen lists the 2350 KS X 1001 hangul syllables,
+ * grouped by initial consonant (the nav buttons read 가, 나다, 라마, 바, 사,
+ * 아, 자, 차카, 타파, 하).
+ */
+#define NR_HANGUL_BLOCKS 14
+static void make_hangul_screen(void)
+{
+	// initial consonant (0..18) -> block (가 나 다 라 마 바 사 아 자 차 카 타 파 하)
+	static const int block_of_initial[19] = {
+		0, 0, 1, 2, 2, 3, 4, 5, 5, 6, 6, 7, 8, 8, 9, 10, 11, 12, 13
+	};
+	static const char *const labels[NR_HANGUL_BLOCKS] = {
+		"가", "나", "다", "라", "마", "바", "사", "아", "자", "차", "카", "타", "파", "하"
+	};
+	// nav button -> first block
+	static const int nav_block[10] = { 0, 1, 3, 5, 6, 7, 8, 9, 11, 13 };
+	static uint32_t chars[NR_HANGUL_BLOCKS][400];
+	int nr[NR_HANGUL_BLOCKS] = {0};
+	for (unsigned lead = 0xb0; lead <= 0xc8; lead++) {
+		for (unsigned trail = 0xa1; trail <= 0xfe; trail++) {
+			char b[3] = { lead, trail, 0 };
+			int u;
+			ai5_char_to_unicode(b, &u);
+			if (u < 0xac00 || u > 0xd7a3)
+				continue;
+			int blk = block_of_initial[(u - 0xac00) / 588];
+			if (nr[blk] < 400)
+				chars[blk][nr[blk]++] = u;
+		}
+	}
+
+	int nr_lines = 0;
+	for (int i = 0; i < NR_HANGUL_BLOCKS; i++)
+		nr_lines += (nr[i] + 17) / 18;
+
+	SDL_Surface *s = alloc_surface(CHARS_W, nr_lines * 24);
+	button_list_list buttons = vector_initializer;
+	int block_row[NR_HANGUL_BLOCKS];
+	int y = 0;
+	SDL_Surface *parts = gfx_get_surface(1);
+	for (int i = 0; i < NR_HANGUL_BLOCKS; i++) {
+		block_row[i] = y / 24;
+		const char *l = labels[i];
+		uint32_t label_ch = decode_utf8_code_point(&l);
+		_gfx_text_draw_glyph(s, 13, y+2, label_ch);
+		_gfx_indexed_copy_masked(420, 48, 40, 24, parts, 4, y, s, MASK_COLOR);
+		int x = 48;
+		button_list line_btn = vector_initializer;
+		for (int j = 0; j < nr[i]; j++, x += 24) {
+			if (j > 0 && j % 18 == 0) {
+				vector_push(button_list, buttons, line_btn);
+				line_btn = (button_list)vector_initializer;
+				x = 48;
+				y += 24;
+			}
+			_gfx_text_draw_glyph(s, x+2, y+2, chars[i][j]);
+			struct button *btn = vector_pushp(struct button, line_btn);
+			char_button_init(btn, x, y, chars[i][j]);
+		}
+		if (vector_length(line_btn) != 0) {
+			vector_push(button_list, buttons, line_btn);
+			y += 24;
+		}
+	}
+	for (int i = 0; i < 10; i++)
+		kanji_nav_btn[i].data = block_row[nav_block[i]];
+
+	kanji_s = s;
+	kanji_btn = buttons;
+}
+
+/*
  * For the kanji screen, we render all characters to an oversized surface
  * in advance. This way the scrolling code can be relatively dumb.
  */
 static void make_kanji_screen(void)
 {
+	if (text_encoding_is_cp949()) {
+		make_hangul_screen();
+		return;
+	}
 	// decode UTF-8 characters for each block
 	uint32_t block_chars[ARRAY_SIZE(kanji)][23*18];
 	int block_nr_chars[ARRAY_SIZE(kanji)];
@@ -1084,14 +1161,16 @@ void shuusaku_name_input_screen(uint8_t *myouji, uint8_t *namae)
 	text_shadow = TEXT_SHADOW_B;
 	gfx_text_set_size(16, 1);
 
+	// the scripts print the name as text: CP949 for Korean patches
+	unsigned (*to_game)(unsigned) = text_encoding_is_cp949() ? unicode_to_cp949 : unicode_to_sjis;
 	for (unsigned i = 0; i < myouji_input.nr_chars; i++) {
-		uint16_t c = unicode_to_sjis(myouji_input.chars[i]);
+		uint16_t c = to_game(myouji_input.chars[i]);
 		myouji[i*2+0] = c >> 8;
 		myouji[i*2+1] = c & 0xff;
 	}
 	myouji[myouji_input.nr_chars * 2] = 0xff;
 	for (unsigned i = 0; i < namae_input.nr_chars; i++) {
-		uint16_t c = unicode_to_sjis(namae_input.chars[i]);
+		uint16_t c = to_game(namae_input.chars[i]);
 		namae[i*2+0] = c >> 8;
 		namae[i*2+1] = c & 0xff;
 	}

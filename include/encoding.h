@@ -54,6 +54,7 @@ const char *ai5_char_to_unicode(const char *src, int *dst);
 bool ai5_text_looks_sjis(const char *s);
 // Korean text for a known untranslated Shift-JIS line, or NULL
 const char *ai5_text_translate_sjis(const char *s);
+unsigned unicode_to_cp949(unsigned u);
 // like ai5_char_is_2byte / ai5_char_to_unicode, but Shift-JIS if `sjis`
 bool ai5_char_is_2byte_enc(uint8_t b, bool sjis);
 const char *ai5_char_to_unicode_enc(const char *src, int *dst, bool sjis);
