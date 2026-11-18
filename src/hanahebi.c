@@ -22,6 +22,7 @@
  * procedure arguments (arg[n]). Only the 2D mode (HH2D.exe) is targeted.
  */
 
+#include <limits.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -164,6 +165,8 @@ static bool msgwin_visible;
 static int msgwin_icon_state;
 static void apply_volume(enum audio_channel ch, const char *section);
 static bool setting_enabled(const char *section, const char *key);
+static void util_minigame1(struct param_list *params);
+static void util_minigame2(struct param_list *params);
 static bool confirm(const char *question);
 static void dic_popup(unsigned i);
 
@@ -2334,6 +2337,22 @@ static void items_read(unsigned no)
 	}
 }
 
+// how to play the training mini games (the original only has a Japanese
+// picture for this, in the free training screen)
+static void minigame_help(void)
+{
+	const char *lines[] = {
+		"[밧줄] 시작을 누르면 분홍 아이콘이 밧줄을 따라 움직입니다.",
+		"아이콘이 매듭에 오면 클릭. 긴 매듭은 끝까지 누르고 있다 떼기.",
+		"甲 좋음 · 乙 보통 · 丙 나쁨. 아이콘이 3번 지나가면 끝.",
+		"[과녁] 몸에 나타난 과녁을 고리가 줄어드는 동안 클릭.",
+		"과녁이 아닌 곳을 누르거나 놓치면 실패. 5번 하면 끝.",
+		"중단 = 그만두기. 잘할수록 조교 경험치가 많이 오릅니다.",
+		"닫기",
+	};
+	choice_run(lines, sizeof(lines) / sizeof(*lines));
+}
+
 /*
  * Util 8000(0, person, again): choose a tool for training. var32[8] =
  * tool * 3 + grade + 1, 25 breasts / 26 mouth (no tool), 513 = choose another person, 514 = end training,
@@ -2341,8 +2360,12 @@ static void items_read(unsigned no)
  */
 static void util_item_select(unsigned person)
 {
-	const char *items[8 * 3 + 4];
-	int codes[8 * 3 + 4];
+	// the mini game switch of the original screen, kept in var4[4250]
+	// (the script stores var16[12] there): 0 = played, 1 = automatic
+	bool mini_auto = mem_get_var4(4250) == 1;
+again:;
+	const char *items[8 * 3 + 6];
+	int codes[8 * 3 + 6];
 	char labels[8 * 3][48];
 	unsigned n = 0;
 	for (unsigned t = 0; t < 8; t++) {
@@ -2362,20 +2385,30 @@ static void util_item_select(unsigned person)
 		items[n] = "입으로 봉사 (펠라치오)";
 		codes[n++] = 26;
 	}
+	items[n] = mini_auto ? "미니게임: 자동  (누르면 직접 하기로)" : "미니게임: 직접 하기  (누르면 자동으로)";
+	codes[n++] = -1;
+	items[n] = "미니게임 조작 설명";
+	codes[n++] = -2;
 	items[n] = "다른 상대 고르기";
 	codes[n++] = 513;
 	items[n] = "조교 끝내기";
 	codes[n++] = 514;
 	int r = choice_run(items, n);
+	if (r >= 0 && codes[r] == -1) {
+		mini_auto = !mini_auto;
+		goto again;
+	}
+	if (r >= 0 && codes[r] == -2) {
+		minigame_help();
+		goto again;
+	}
 	mem_set_var32(8, r < 0 ? 515 : codes[r]);
 	/*
 	 * var16[12]: the training mini game, 1 = automatic (the scripts then
 	 * give a score of 3: System.var16[200] = 3), 0 = played (Util 66/67,
-	 * score 0..7 from the hit rate, HH2D.exe 0x42e6e0). The original
-	 * screen has a switch for it; we do not have the mini game yet, so
-	 * training is always automatic.
+	 * score 0..7 from the hit rate, HH2D.exe 0x42e6e0).
 	 */
-	mem_set_var16(12, 1);
+	mem_set_var16(12, mini_auto ? 1 : 0);
 }
 
 static void util_item_get(unsigned tool, unsigned grade)
@@ -3387,7 +3420,12 @@ static void hanahebi_util(struct param_list *params)
 	case 1000: // create the map (our map needs no setup)
 	case 1009: case 1020: case 1024: case 1025: // no-ops in HH2D.exe
 	case 1: case 100: case 111: case 1026: case 1028:  // not handled by HH2D.exe (1 = 3D fades)
-	case 66: case 67: // 3D objects (not created in the 2D version)
+		break;
+	case 66: // training mini game: rope (hanahebi_minigame.h)
+		util_minigame1(params);
+		break;
+	case 67: // training mini game: targets
+		util_minigame2(params);
 		break;
 	case 80: // (80, 0): a "deck" of 10 bytes at 0x2568, count at 0x2572
 		if (param_or(params, 1, 0) == 0) {
@@ -6237,8 +6275,9 @@ static void util_room(struct param_list *params)
  * settings screen from om_free_*.gcc).
  *   (20000, 0, 0): character -> var32[9] = 0..4 (6 = back)
  *   (20000, 1, c): settings -> heap bytes 0 level (0..2 = 1st..3rd),
- *                  1 tool (0..9), 2 experience (0..2), 3 minigame auto (0/1),
- *                  4 (0); var16[18] = 1 start, 0 back to the character list
+ *                  1 tool (0..9), 2 experience (0..2), 3 (0),
+ *                  4 mini game automatic (0/1, the script copies it to
+ *                  var16[12]); var16[18] = 1 start, 0 back to the character list
  * Choices are limited to scenes that exist (<chr>_<tool><level>01.mes).
  */
 static const char *ft_chr[5] = { "siz", "kei", "kyo", "mit", "cha" };
@@ -6248,7 +6287,7 @@ static const char *ft_tool[10] = { "vib", "zuiki", "paizuri", "fella", "anal",
 static const char *ft_tool_ko[10] = { "바이브", "토란 줄기 감기", "파이즈리", "펠라치오",
 	"애널 드릴", "이뇨제", "관장", "승마 채찍", "청죽", "촛농" };
 static const char *ft_level[3] = { "1st", "2nd", "3rd" };
-static int ft_sel_tool = -1, ft_sel_level = -1, ft_exp = 0, ft_auto = 1;
+static int ft_sel_tool = -1, ft_sel_level = -1, ft_exp = 0, ft_auto = 0;
 
 static bool ft_scene_exists(int c, int tool, int level)
 {
@@ -6311,10 +6350,14 @@ static void util_free_training(struct param_list *params)
 		snprintf(l_tool, sizeof(l_tool), "%s — 도구: %s", ft_chr_ko[c], ft_tool_ko[ft_sel_tool]);
 		snprintf(l_level, sizeof(l_level), c == 4 ? "단계: (없음)" : "단계: %d단계", ft_sel_level + 1);
 		snprintf(l_exp, sizeof(l_exp), "조교 경험: %s", exp_ko[ft_exp]);
-		// the mini game itself is not made yet: always automatic
-		snprintf(l_mini, sizeof(l_mini), "미니게임: 자동 (직접 하기는 아직 없음)");
-		const char *items[6] = { l_tool, l_level, l_exp, l_mini, "조교 시작", "인물 바꾸기" };
-		int r = choice_run(items, 6);
+		snprintf(l_mini, sizeof(l_mini), ft_auto ? "미니게임: 자동" : "미니게임: 직접 하기");
+		const char *items[7] = { l_tool, l_level, l_exp, l_mini, "조교 시작", "인물 바꾸기",
+			"미니게임 조작 설명" };
+		int r = choice_run(items, 7);
+		if (r == 6) {
+			minigame_help();
+			continue;
+		}
 		if (r < 0 || r == 5) {
 			mem_set_var16(18, 0);
 			return;
@@ -6349,14 +6392,15 @@ static void util_free_training(struct param_list *params)
 		} else if (r == 2) {
 			ft_exp = (ft_exp + 1) % 3;
 		} else if (r == 3) {
-			ft_auto = 1;
+			ft_auto = !ft_auto;
 		} else if (r == 4) {
 			uint8_t *heap = memory_raw + mem_get_sysvar16(0);
 			heap[0] = c == 4 ? 0 : ft_sel_level;
 			heap[1] = ft_sel_tool;
 			heap[2] = ft_exp;
-			heap[3] = ft_auto;
-			heap[4] = 0;
+			// CHOUKYOUMODE.MES: var16[12] (mini game automatic) = byte 4
+			heap[3] = 0;
+			heap[4] = ft_auto;
 			mem_set_var16(18, 1);
 			return;
 		}
@@ -6631,3 +6675,5 @@ struct game game_hanahebi = {
 		[FLAG_WAIT_KEYUP] = FLAG_ALWAYS_ON,
 	},
 };
+
+#include "hanahebi_minigame.h"

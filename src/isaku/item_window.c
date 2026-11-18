@@ -61,7 +61,9 @@ static void item_window_create(void)
 static void item_overlay_create(void)
 {
 	SDL_Surface *s = gfx_get_overlay(1);
-	SDL_Rect r = { 0, 0, 640, 480 };
+	SDL_CALL(SDL_FillRect, s, NULL, SDL_MapRGBA(s->format, 0, 0, 0, 0));
+	// dark frame around the item bar only (the scene stays visible)
+	SDL_Rect r = { OVERLAY_X - 4, OVERLAY_Y - 4, ITEM_WINDOW_W + 8, ITEM_WINDOW_H + 8 };
 	SDL_CALL(SDL_FillRect, s, &r, SDL_MapRGBA(s->format, 0, 0, 0, 200));
 }
 
@@ -217,11 +219,24 @@ static bool item_overlay_event(SDL_Event *e)
 	assert(item_window.opened);
 	switch (e->type) {
 	case SDL_MOUSEBUTTONDOWN:
-	case SDL_MOUSEBUTTONUP:
+	case SDL_MOUSEBUTTONUP: {
 		if (e->button.windowID != gfx.window_id)
 			return false;
+		// only clicks on the item bar belong to it; the rest of the
+		// screen keeps working (PC: the item window is a separate window
+		// next to the game, the scripts open it when the story starts)
+		float fx, fy;
+		SDL_RenderWindowToLogical(gfx.renderer, e->button.x, e->button.y, &fx, &fy);
+		bool inside = fx >= OVERLAY_X && fx < OVERLAY_X + ITEM_WINDOW_W
+			&& fy >= OVERLAY_Y && fy < OVERLAY_Y + ITEM_WINDOW_H;
+		if (!inside) {
+			if (e->type == SDL_MOUSEBUTTONUP)
+				handle_button_event(&e->button);
+			return false;
+		}
 		handle_button_event(&e->button);
 		return true;
+	}
 	}
 	return false;
 }
