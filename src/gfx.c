@@ -51,19 +51,28 @@ void gfx_warning_message(const char *message)
 	SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "Warning - AI5-SDL2", message, gfx.window);
 }
 
+// Android shows the phone's own dialog (Korean text works there); the X11
+// message box on PC has no Korean font, so English stays on PC
+#ifdef __ANDROID__
+#define QUIT_TEXT(en, ko) (ko)
+#else
+#define QUIT_TEXT(en, ko) (en)
+#endif
+
 bool gfx_confirm_quit(void)
 {
-	static const SDL_MessageBoxButtonData buttons[] = {
-		{ SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "OK" },
-		{ SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, "Cancel" },
+	const SDL_MessageBoxButtonData buttons[] = {
+		{ SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, QUIT_TEXT("OK", "종료") },
+		{ SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, QUIT_TEXT("Cancel", "취소") },
 	};
 	const SDL_MessageBoxData mbox = {
 		SDL_MESSAGEBOX_INFORMATION,
 		NULL,
-		"Really Quit? - AI5-SDL2",
-		"Are you sure you want to quit?\n"
+		QUIT_TEXT("Really Quit? - AI5-SDL2", "게임 종료"),
+		QUIT_TEXT("Are you sure you want to quit?\n"
 		"Any unsaved progress will be lost.\n"
 		"Quit game?",
+		"게임을 끝낼까요?\n저장하지 않은 진행 내용은 사라집니다."),
 		SDL_arraysize(buttons),
 		buttons,
 		NULL
