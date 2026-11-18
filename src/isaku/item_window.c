@@ -267,7 +267,11 @@ void isaku_item_window_get_cursor_pos(int *x, int *y)
 		*x = ITEM_WINDOW_W;
 		*y = ITEM_WINDOW_H;
 	} else if (item_window.use_overlay) {
-		SDL_GetMouseState(x, y);
+		// game-screen coordinates (the window may be scaled, e.g. Android)
+		unsigned cx, cy;
+		cursor_get_pos(&cx, &cy);
+		*x = cx;
+		*y = cy;
 		if (*x < OVERLAY_X)
 			*x = ITEM_WINDOW_W;
 		if (*y < OVERLAY_Y)
