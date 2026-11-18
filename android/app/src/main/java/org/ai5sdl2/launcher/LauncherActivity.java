@@ -425,8 +425,10 @@ public class LauncherActivity extends Activity {
             warn = "AI6WIN 게임(예: 귀작)은 지원하지 않습니다.";
         else if (id.equals("hanahebi") && !hasFile(dir, "HH2D.exe"))
             warn = "꽃과뱀 폴더에는 HH2D.exe가 있어야 합니다.";
-        else if (!hasFile(dir, "AI5WIN.EXE") && !hasFile(dir, "HH2D.exe"))
-            warn = "AI5WIN.EXE가 없습니다. 게임 폴더가 맞는지 확인하세요.";
+        else if (!hasFile(dir, "AI5WIN.EXE") && !hasFile(dir, "HH2D.exe")
+                && !hasFile(dir, "AIWIN.EXE") && !hasFile(dir, "AIWINK.EXE"))
+            // Shuusaku runs as AIWIN.EXE (Korean: AIWINK.EXE)
+            warn = "게임 실행 파일(AI5WIN.EXE 등)이 없습니다. 게임 폴더가 맞는지 확인하세요.";
         else if (langOf(game).equals("ko") && !GAMES[game][3].isEmpty()
                 && !hasFile(dir, GAMES[game][3]))
             warn = "언어가 한글판으로 지정되어 있지만 " + GAMES[game][3]
