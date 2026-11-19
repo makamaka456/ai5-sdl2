@@ -158,8 +158,25 @@ end:
 	archive_data_release(data);
 }
 
+// debugging: AI5_REDIRECT_MES="FROM.MES=TO.MES" loads TO instead of FROM
+static char *mes_redirect(char *name)
+{
+	static char redirect_to[64];
+	const char *rd = getenv("AI5_REDIRECT_MES");
+	if (rd) {
+		const char *eq = strchr(rd, '=');
+		if (eq && (size_t)(eq - rd) == strlen(name) && !strncasecmp(rd, name, eq - rd)) {
+			strncpy(redirect_to, eq + 1, sizeof(redirect_to) - 1);
+			return redirect_to;
+		}
+	}
+	return name;
+}
+
 void vm_load_mes(char *name)
 {
+	if (!game_is_nonomura_vm())
+		name = mes_redirect(name);
 	if (game_is_nonomura_vm()) {
 		vm_load_mes_with_table(name);
 		return;
