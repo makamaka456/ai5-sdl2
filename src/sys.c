@@ -179,6 +179,13 @@ void sys_file(struct param_list *params)
 
 void sys_load_file(struct param_list *params)
 {
+	// test switch: log data files (e.g. Isaku's .a6 click areas) for
+	// scripted test play
+	static int log_files = -1;
+	if (log_files < 0)
+		log_files = getenv("AI5_DEBUG_LOAD_FILE") != NULL;
+	if (log_files)
+		NOTICE("load_file %s", vm_string_param(params, 0));
 	vm_load_data_file(vm_string_param(params, 0), vm_expr_param(params, 1));
 }
 
